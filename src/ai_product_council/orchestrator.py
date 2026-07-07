@@ -9,40 +9,47 @@ from ai_product_council.agents import get_default_agents
 from ai_product_council.config import Settings, load_settings
 from ai_product_council.json_utils import extract_json_object
 from ai_product_council.llm_client import LLMClientError, LMStudioClient
-from ai_product_council.models import AgentResponse, AgentRole, MeetingState, PhaseName
+from ai_product_council.models import (
+    AgentPayload,
+    AgentRole,
+    ClarifyingQuestion,
+    MeetingState,
+    MeetingTurn,
+    PhaseName,
+    ProjectMode,
+    ResponseStatus,
+    UserAnswer,
+)
 
 
 PHASE_LABELS: dict[PhaseName, str] = {
-    "questions": "Уточняющие вопросы",
+    "clarifying_questions": "Уточняющие вопросы",
     "analysis": "Индивидуальный анализ",
     "debate": "Обсуждение и спор",
-    "mvp_proposal": "Предложения по MVP",
-    "mvp_vote": "Голосование и приоритизация",
+    "mvp_proposal": "MVP / scope первой версии",
+    "mvp_vote": "Голосование и решение",
 }
 
-PHASE_INSTRUCTIONS: dict[PhaseName, str] = {
-    "questions": "Задай 1-2 самых важных уточняющих вопроса пользователю со своей профессиональной позиции.",
-    "analysis": "Проанализируй идею со своей роли: ценность, слабые места, ограничения и что важно проверить.",
-    "debate": "Отреагируй на аргументы других агентов. Согласись или поспорь, но предложи конструктивное уточнение.",
-    "mvp_proposal": "Предложи, что должно войти в первую версию продукта, и что нужно отложить.",
-    "mvp_vote": (
-        "Проголосуй за решение: go, go_after_clarification, no_go или pivot_or_narrow_mvp. "
-        "Выбери MVP-функции, главные риски и следующий шаг."
-    ),
-}
+DISCUSSION_PHASES: list[PhaseName] = ["analysis", "debate", "mvp_proposal", "mvp_vote"]
 
-OUTPUT_SCHEMA = """
-Верни строго один JSON-объект без markdown:
+QUESTION_SCHEMA = """
+Return only JSON:
 {
-  "agent": "название агента",
-  "phase": "questions | analysis | debate | mvp_proposal | mvp_vote",
-  "summary": "краткий вывод",
-  "questions": ["вопрос 1"],
-  "arguments": ["аргумент 1"],
-  "risks": ["риск 1"],
-  "mvp_features": ["функция 1"],
+  "question": "one important Russian question",
+  "summary": "why this question matters"
+}
+"""
+
+TURN_SCHEMA = """
+Return only JSON:
+{
+  "summary": "short Russian position",
+  "arguments": ["1-3 arguments"],
+  "risks": ["0-3 risks"],
+  "mvp_features": ["0-3 features"],
+  "out_of_scope": ["0-3 items not for v1"],
   "decision": "go | go_after_clarification | no_go | pivot_or_narrow_mvp | unknown",
-  "next_step": "главный следующий шаг",
+  "next_step": "one practical next step",
   "confidence": 1
 }
 """
@@ -59,261 +66,438 @@ class CouncilOrchestrator:
         self.llm_client = llm_client or LMStudioClient(self.settings)
         self.agents = agents or get_default_agents()
 
-    def run_meeting(self, idea: str) -> MeetingState:
-        state = MeetingState(idea=idea)
-        for phase in PHASE_LABELS:
+    def create_state(
+        self,
+        idea: str,
+        project_mode: ProjectMode,
+        constraints: str = "",
+        desired_result: str = "",
+    ) -> MeetingState:
+        return MeetingState(
+            idea=idea.strip(),
+            project_mode=project_mode,
+            constraints=constraints.strip(),
+            desired_result=desired_result.strip(),
+        )
+
+    def collect_questions(self, state: MeetingState) -> list[ClarifyingQuestion]:
+        state.questions = [self.ask_clarifying_question(agent, state) for agent in self.agents]
+        return state.questions
+
+    def set_user_answer(self, state: MeetingState, answer_text: str) -> None:
+        state.user_answer = UserAnswer(text=answer_text.strip())
+
+    def run_discussion(self, state: MeetingState) -> MeetingState:
+        for phase in DISCUSSION_PHASES:
             for agent in self.agents:
-                response = self.ask_agent(agent=agent, phase=phase, state=state)
-                state.add_response(response)
-        state.final_report = self.build_final_report(state)
+                state.transcript.add(self.ask_agent_turn(agent=agent, phase=phase, state=state))
+        state.transcript_markdown = self.build_transcript_markdown(state)
+        state.final_plan_markdown = self.build_final_plan_markdown(state)
         return state
 
-    def ask_agent(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> AgentResponse:
-        messages = self.build_messages(agent=agent, phase=phase, state=state)
-        try:
-            raw = self.llm_client.chat(messages)
-        except LLMClientError as exc:
-            return self._fallback_response(agent.name, phase, str(exc))
-        parsed = self.parse_agent_response(raw, agent.name, phase)
-        if parsed.is_fallback:
-            if "{" not in raw or "}" not in raw:
-                return self._fallback_response(agent.name, phase, parsed.error or "JSON object not found", raw)
-            retry_messages = messages + [
-                {
-                    "role": "assistant",
-                    "content": raw,
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Предыдущий ответ не удалось распарсить как нужный JSON. "
-                        "Исправь формат и верни только валидный JSON по схеме."
-                    ),
-                },
-            ]
-            try:
-                retry_raw = self.llm_client.chat(retry_messages)
-            except LLMClientError as exc:
-                return self._fallback_response(agent.name, phase, str(exc), raw)
-            retry_parsed = self.parse_agent_response(retry_raw, agent.name, phase)
-            if retry_parsed.is_fallback:
-                return self._fallback_response(agent.name, phase, retry_parsed.error or "Invalid JSON", retry_raw)
-            return retry_parsed
-        return parsed
-
-    def build_messages(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> list[dict[str, str]]:
-        private_context = self._read_private_context(agent.private_context_path)
-        meeting_context = self._summarize_state_for_prompt(state)
-        system = (
-            f"{agent.system_prompt}\n\n"
-            "Ты участвуешь в рабочем созвоне по проектированию B2B SaaS. Пиши кратко. "
-            "Не показывай ход рассуждений. Верни только JSON.\n\n"
-            f"Твой приватный контекст, недоступный другим агентам:\n{private_context}\n\n"
-            f"{OUTPUT_SCHEMA}"
-        )
-        user = (
-            "/no_think\n"
-            f"Идея пользователя:\n{state.idea}\n\n"
-            f"Фаза: {phase} — {PHASE_LABELS[phase]}.\n"
-            f"Задача фазы: {PHASE_INSTRUCTIONS[phase]}\n\n"
-            f"Контекст предыдущих фаз:\n{meeting_context}\n\n"
-            "Заполни поля JSON применимо к этой фазе. Для нерелевантных списков используй пустые массивы, "
-            "для decision используй unknown, если это не фаза голосования. Отвечай кратко."
-        )
-        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-    def parse_agent_response(self, raw: str, agent_name: str, phase: PhaseName) -> AgentResponse:
-        try:
-            data = extract_json_object(raw)
-            data["agent"] = agent_name
-            data["phase"] = phase
-            data["raw_text"] = raw
-            return AgentResponse.model_validate(data)
-        except (ValueError, ValidationError, TypeError) as exc:
-            return AgentResponse(
-                agent=agent_name,
-                phase=phase,
-                summary="Не удалось получить валидный JSON-ответ от модели.",
-                raw_text=raw,
-                is_fallback=True,
-                error=str(exc),
-            )
-
-    def _fallback_response(
+    def run_full_meeting(
         self,
-        agent_name: str,
-        phase: PhaseName,
-        error: str,
-        raw_text: str = "",
-    ) -> AgentResponse:
-        templates = {
-            "questions": {
-                "summary": "Fallback: нужны ключевые уточнения перед оценкой.",
-                "questions": [
-                    "Кто основной покупатель и кто ежедневный пользователь продукта?",
-                    "Какую ручную или дорогую операцию продукт должен заменить в первом MVP?",
-                ],
-            },
-            "analysis": {
-                "summary": "Fallback: идею стоит проверять через узкий ICP и один основной workflow.",
-                "arguments": [
-                    "MVP должен доказывать ценность на одном повторяемом сценарии.",
-                    "Сложные интеграции лучше заменить импортом/экспортом на первой версии.",
-                ],
-                "risks": ["Слишком широкий scope", "Неясный бюджет покупателя"],
-            },
-            "debate": {
-                "summary": "Fallback: проект можно запускать только с ограничением scope.",
-                "arguments": [
-                    "Сначала нужна проверка боли и готовности платить.",
-                    "Архитектура должна оставлять место для ролей доступа и аудита.",
-                ],
-                "risks": ["Перегрузка MVP функциями"],
-            },
-            "mvp_proposal": {
-                "summary": "Fallback: первая версия должна закрывать базовый end-to-end сценарий.",
-                "mvp_features": [
-                    "Ввод и структурирование исходных данных клиента",
-                    "Генерация черновика проектного/MVP-плана",
-                    "Экспорт итогового отчёта",
-                ],
-                "risks": ["Низкое качество входных данных"],
-            },
-            "mvp_vote": {
-                "summary": "Fallback: запускать после сужения MVP и проверки ICP.",
-                "mvp_features": [
-                    "Ввод идеи продукта",
-                    "Многоагентный анализ",
-                    "Финальный отчёт",
-                ],
-                "risks": [
-                    "Слишком широкий ICP",
-                    "Медленная локальная модель",
-                    "Невалидные JSON-ответы LLM",
-                ],
-                "decision": "go_after_clarification",
-                "next_step": "Провести 5-7 интервью с потенциальными B2B-клиентами.",
-            },
-        }
-        data = templates[phase]
-        return AgentResponse(
-            agent=agent_name,
+        idea: str,
+        project_mode: ProjectMode = "new_saas",
+        constraints: str = "",
+        desired_result: str = "",
+        user_answer_text: str = "",
+    ) -> MeetingState:
+        state = self.create_state(idea, project_mode, constraints, desired_result)
+        self.collect_questions(state)
+        self.set_user_answer(state, user_answer_text)
+        return self.run_discussion(state)
+
+    def ask_clarifying_question(self, agent: AgentRole, state: MeetingState) -> ClarifyingQuestion:
+        messages = self._build_question_messages(agent, state)
+        raw, status, error = self._chat_with_repair(messages, QUESTION_SCHEMA)
+        if status == "failed":
+            return ClarifyingQuestion(
+                agent=agent.name,
+                role=agent.slug,
+                question="",
+                status=status,
+                error=error,
+                raw_text=raw,
+            )
+        payload = self._parse_payload(raw, agent.name, "clarifying_questions")
+        return ClarifyingQuestion(
+            agent=agent.name,
+            role=agent.slug,
+            question=payload.question,
+            status=status,
+            error=error,
+            raw_text=raw,
+        )
+
+    def ask_agent_turn(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> MeetingTurn:
+        messages = self.build_messages(agent=agent, phase=phase, state=state)
+        raw, status, error = self._chat_with_repair(messages, TURN_SCHEMA)
+        if status == "failed":
+            return MeetingTurn(
+                agent=agent.name,
+                role=agent.slug,
+                phase=phase,
+                status=status,
+                raw_text=raw,
+                error=error,
+            )
+        return MeetingTurn(
+            agent=agent.name,
+            role=agent.slug,
             phase=phase,
-            summary=data.get("summary", ""),
-            questions=data.get("questions", []),
-            arguments=data.get("arguments", []),
-            risks=data.get("risks", []),
-            mvp_features=data.get("mvp_features", []),
-            decision=data.get("decision", "unknown"),
-            next_step=data.get("next_step", ""),
-            raw_text=raw_text,
-            is_fallback=True,
+            status=status,
+            payload=self._parse_payload(raw, agent.name, phase),
+            raw_text=raw,
             error=error,
         )
 
+    def build_messages(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> list[dict[str, str]]:
+        private_context = self._read_private_context(agent.private_context_path)
+        system = self._agent_system_prompt(agent, private_context, TURN_SCHEMA)
+        user = (
+            "/no_think\n"
+            f"Project mode: {self._project_mode_label(state.project_mode)}\n"
+            f"Idea:\n{state.idea}\n\n"
+            f"Constraints:\n{state.constraints or 'Не указаны'}\n\n"
+            f"Desired result:\n{state.desired_result or 'Не указан'}\n\n"
+            f"Clarifying questions:\n{self._format_questions(state)}\n\n"
+            f"User answers:\n{state.user_answer.text or 'Пользователь не дал дополнительных ответов.'}\n\n"
+            f"Current phase: {phase} ({PHASE_LABELS[phase]}).\n"
+            f"Previous meeting summary:\n{self._short_transcript_summary(state)}\n\n"
+            f"Instruction: {self._phase_instruction(phase)}"
+        )
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    def parse_agent_response(self, raw: str, agent_name: str, phase: PhaseName) -> MeetingTurn:
+        return MeetingTurn(
+            agent=agent_name,
+            role="unknown",
+            phase=phase,
+            status="llm",
+            payload=self._parse_payload(raw, agent_name, phase),
+            raw_text=raw,
+        )
+
     def aggregate_votes(self, state: MeetingState) -> dict:
-        vote_responses = state.votes
-        decisions = Counter(response.decision for response in vote_responses)
+        valid_votes = [turn for turn in state.votes if turn.status != "failed"]
+        decisions = Counter(turn.payload.decision for turn in valid_votes)
         features = Counter(
             feature
-            for response in vote_responses
-            for feature in response.mvp_features
+            for turn in valid_votes
+            for feature in turn.payload.mvp_features
             if feature.strip()
         )
         risks = Counter(
             risk
-            for response in vote_responses
-            for risk in response.risks
-            if risk.strip()
+            for turn in state.transcript.turns
+            for risk in turn.payload.risks
+            if turn.status != "failed" and risk.strip()
         )
-        next_steps = [response.next_step for response in vote_responses if response.next_step.strip()]
+        next_steps = [
+            turn.payload.next_step
+            for turn in valid_votes
+            if turn.payload.next_step.strip()
+        ]
         return {
             "decision_counts": dict(decisions),
             "final_decision": decisions.most_common(1)[0][0] if decisions else "unknown",
             "top_features": [item for item, _ in features.most_common(3)],
             "top_risks": [item for item, _ in risks.most_common(3)],
-            "next_step": next_steps[0] if next_steps else "Провести интервью с потенциальными клиентами.",
+            "next_step": next_steps[0] if next_steps else "Провести проблемные интервью и уточнить scope MVP.",
         }
 
-    def build_final_report(self, state: MeetingState) -> str:
+    def response_stats(self, state: MeetingState) -> dict[str, int]:
+        statuses = Counter(question.status for question in state.questions)
+        statuses.update(turn.status for turn in state.transcript.turns)
+        return {
+            "llm": statuses.get("llm", 0),
+            "repaired": statuses.get("repaired", 0),
+            "failed": statuses.get("failed", 0),
+        }
+
+    def build_transcript_markdown(self, state: MeetingState) -> str:
+        stats = self.response_stats(state)
+        lines = [
+            "# Протокол AI Product Council",
+            "",
+            f"**Режим проекта:** {self._project_mode_label(state.project_mode)}",
+            "",
+            "## Исходная идея",
+            "",
+            state.idea,
+            "",
+            "## Ограничения и желаемый результат",
+            "",
+            f"- Ограничения: {state.constraints or 'Не указаны'}",
+            f"- Желаемый результат: {state.desired_result or 'Не указан'}",
+            "",
+            "## Уточняющие вопросы",
+            "",
+        ]
+        for question in state.questions:
+            value = question.question or f"[failed] {question.error}"
+            lines.append(f"- **{question.agent}** ({question.status}): {value}")
+
+        lines.extend(["", "## Ответы пользователя", "", state.user_answer.text or "Не указаны.", ""])
+
+        for phase in DISCUSSION_PHASES:
+            lines.extend(["", f"## {PHASE_LABELS[phase]}", ""])
+            for turn in [item for item in state.transcript.turns if item.phase == phase]:
+                lines.append(f"### {turn.agent} ({turn.status})")
+                if turn.status == "failed":
+                    lines.extend(["", f"> Failed: {turn.error}", ""])
+                    continue
+                lines.extend(
+                    [
+                        "",
+                        turn.payload.summary or "Нет краткого вывода.",
+                        "",
+                    ]
+                )
+                self._append_list(lines, "Аргументы", turn.payload.arguments)
+                self._append_list(lines, "Риски", turn.payload.risks)
+                self._append_list(lines, "MVP / scope", turn.payload.mvp_features)
+                self._append_list(lines, "Не входит в v1", turn.payload.out_of_scope)
+                if phase == "mvp_vote":
+                    lines.append(f"- Решение: `{turn.payload.decision}`")
+                    lines.append(f"- Следующий шаг: {turn.payload.next_step or 'Не указан'}")
+                lines.append("")
+
+        lines.extend(
+            [
+                "## Техническая диагностика",
+                "",
+                f"- LLM: {stats['llm']}",
+                f"- Repaired: {stats['repaired']}",
+                f"- Failed: {stats['failed']}",
+                "",
+            ]
+        )
+        return "\n".join(lines).strip() + "\n"
+
+    def build_final_plan_markdown(self, state: MeetingState) -> str:
         aggregated = self.aggregate_votes(state)
-        analyses = state.phases.get("analysis", [])
-        proposals = state.phases.get("mvp_proposal", [])
+        analyses = [turn for turn in state.transcript.turns if turn.phase == "analysis" and turn.status != "failed"]
+        proposals = [turn for turn in state.transcript.turns if turn.phase == "mvp_proposal" and turn.status != "failed"]
+        votes = [turn for turn in state.votes if turn.status != "failed"]
+        features = aggregated["top_features"] or self._collect_unique(
+            feature for turn in proposals for feature in turn.payload.mvp_features
+        )[:3]
+        risks = aggregated["top_risks"] or self._collect_unique(
+            risk for turn in analyses for risk in turn.payload.risks
+        )[:3]
+        out_of_scope = self._collect_unique(
+            item for turn in proposals for item in turn.payload.out_of_scope
+        )[:5]
 
-        analysis_lines = "\n".join(
-            f"- **{response.agent}:** {response.summary}" for response in analyses if response.summary
+        lines = [
+            "# Итоговый MVP / Feature Plan",
+            "",
+            "## Краткое описание",
+            "",
+            state.idea,
+            "",
+            "## Целевой клиент и ценность",
+            "",
+        ]
+        if analyses:
+            for turn in analyses:
+                lines.append(f"- **{turn.agent}:** {turn.payload.summary}")
+        else:
+            lines.append("- Недостаточно валидных ответов агентов для уверенного вывода.")
+
+        lines.extend(["", "## MVP / Scope первой версии", ""])
+        self._append_plain_list(lines, features, "Не определено")
+
+        lines.extend(["", "## Что не входит в первую версию", ""])
+        self._append_plain_list(lines, out_of_scope, "Не определено")
+
+        lines.extend(["", "## Архитектура MVP", ""])
+        tech_turns = [turn for turn in analyses + proposals if turn.role == "tech_lead"]
+        if tech_turns:
+            for turn in tech_turns:
+                for argument in turn.payload.arguments[:3]:
+                    lines.append(f"- {argument}")
+                for feature in turn.payload.mvp_features[:3]:
+                    lines.append(f"- {feature}")
+        else:
+            lines.extend(
+                [
+                    "- Streamlit UI для сценария защиты и демонстрации.",
+                    "- Python-оркестратор для фаз созвона и хранения состояния.",
+                    "- LM Studio OpenAI-compatible API для локальной LLM.",
+                    "- Markdown/JSON экспорт результатов.",
+                ]
+            )
+
+        lines.extend(["", "## UX / Workflow", ""])
+        ux_turns = [turn for turn in analyses + proposals if turn.role == "ux_researcher"]
+        if ux_turns:
+            for turn in ux_turns:
+                lines.append(f"- {turn.payload.summary}")
+                for feature in turn.payload.mvp_features[:2]:
+                    lines.append(f"- {feature}")
+        else:
+            lines.append("- Проверить основной пользовательский workflow на 2-3 реальных сценариях.")
+
+        lines.extend(["", "## GTM / Rollout", ""])
+        sales_turns = [turn for turn in analyses + proposals if turn.role == "sales_gtm"]
+        if sales_turns:
+            for turn in sales_turns:
+                lines.append(f"- {turn.payload.summary}")
+        else:
+            lines.append("- Найти 2-3 дизайн-партнёра и проверить готовность к пилоту.")
+
+        lines.extend(["", "## Security / Compliance", ""])
+        security_turns = [turn for turn in analyses + proposals if turn.role == "security"]
+        if security_turns:
+            for turn in security_turns:
+                lines.append(f"- {turn.payload.summary}")
+                for risk in turn.payload.risks[:2]:
+                    lines.append(f"- Риск: {risk}")
+        else:
+            lines.append("- Зафиксировать требования к данным, доступам и хранению до пилота.")
+
+        lines.extend(["", "## Топ-3 риска", ""])
+        self._append_plain_list(lines, risks, "Не определено")
+
+        lines.extend(
+            [
+                "",
+                "## План на 4-6 недель",
+                "",
+                "- Неделя 1: уточнить ICP, пользовательский workflow и критерии успеха пилота.",
+                "- Неделя 2: собрать прототип основного сценария без сложных интеграций.",
+                "- Неделя 3: реализовать MVP-функции, базовое хранение данных и экспорт результата.",
+                "- Неделя 4: провести пилот с 2-3 пользователями или командами.",
+                "- Неделя 5-6: доработать UX, безопасность, отчётность и подготовить решение go/no-go.",
+                "",
+                "## Итоговое решение команды",
+                "",
+                f"**{aggregated['final_decision']}**",
+                "",
+            ]
         )
-        proposal_lines = "\n".join(
-            f"- **{response.agent}:** {', '.join(response.mvp_features) or response.summary}"
-            for response in proposals
+        if votes:
+            for turn in votes:
+                lines.append(f"- **{turn.agent}:** `{turn.payload.decision}` — {turn.payload.summary}")
+        lines.extend(["", f"**Следующий шаг:** {aggregated['next_step']}", ""])
+        return "\n".join(lines).strip() + "\n"
+
+    def _chat_with_repair(self, messages: list[dict[str, str]], schema: str) -> tuple[str, ResponseStatus, str | None]:
+        try:
+            raw = self.llm_client.chat(messages)
+        except LLMClientError as exc:
+            return "", "failed", str(exc)
+        try:
+            AgentPayload.model_validate(extract_json_object(raw))
+            return raw, "llm", None
+        except Exception as exc:
+            repair_messages = messages + [
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content": f"Repair your answer. {schema}"},
+            ]
+            try:
+                repaired = self.llm_client.chat(repair_messages)
+                AgentPayload.model_validate(extract_json_object(repaired))
+                return repaired, "repaired", str(exc)
+            except Exception as repair_exc:
+                return raw, "failed", f"{exc}; repair failed: {repair_exc}"
+
+    def _parse_payload(self, raw: str, agent_name: str, phase: PhaseName) -> AgentPayload:
+        try:
+            data = extract_json_object(raw)
+            return AgentPayload.model_validate(data)
+        except (ValueError, ValidationError, TypeError) as exc:
+            raise ValueError(f"Invalid payload from {agent_name} in {phase}: {exc}") from exc
+
+    def _build_question_messages(self, agent: AgentRole, state: MeetingState) -> list[dict[str, str]]:
+        private_context = self._read_private_context(agent.private_context_path)
+        system = self._agent_system_prompt(agent, private_context, QUESTION_SCHEMA)
+        user = (
+            "/no_think\n"
+            f"Project mode: {self._project_mode_label(state.project_mode)}\n"
+            f"Idea:\n{state.idea}\n\n"
+            f"Constraints:\n{state.constraints or 'Не указаны'}\n\n"
+            f"Desired result:\n{state.desired_result or 'Не указан'}\n\n"
+            "Ask exactly one question that is important for your role and changes the MVP/scope decision."
         )
-        features = "\n".join(f"- {feature}" for feature in aggregated["top_features"]) or "- Не определено"
-        risks = "\n".join(f"- {risk}" for risk in aggregated["top_risks"]) or "- Не определено"
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-        return f"""# Итоговый проект-план
+    def _agent_system_prompt(self, agent: AgentRole, private_context: str, schema: str) -> str:
+        return (
+            f"{agent.system_prompt}\n"
+            "Ты участник рабочего созвона IT-команды. Отвечай кратко, конкретно, по-русски. "
+            "Не показывай ход рассуждений. Не повторяй других агентов. "
+            "Используй только свою роль и приватный контекст.\n\n"
+            f"Приватный контекст роли:\n{private_context}\n\n"
+            f"{schema}"
+        )
 
-## Краткое описание продукта
+    def _phase_instruction(self, phase: PhaseName) -> str:
+        return {
+            "analysis": "Дай позицию своей роли: ценность, ограничения, риски и что проверить.",
+            "debate": "Отреагируй на предыдущие реплики: согласись, поспорь или уточни риск.",
+            "mvp_proposal": "Предложи scope первой версии: что входит, что не входит.",
+            "mvp_vote": "Проголосуй и назови топ-функции, риски и следующий шаг.",
+            "clarifying_questions": "Задай один важный вопрос.",
+        }[phase]
 
-{state.idea}
+    def _format_questions(self, state: MeetingState) -> str:
+        if not state.questions:
+            return "Вопросы ещё не заданы."
+        return "\n".join(
+            f"- {question.agent}: {question.question or '[failed]'}"
+            for question in state.questions
+        )
 
-## Оценка агентов
-
-{analysis_lines or "- Пока нет валидных оценок агентов."}
-
-## MVP
-
-Топ-3 функции MVP по голосованию:
-
-{features}
-
-Предложения агентов:
-
-{proposal_lines or "- Пока нет валидных предложений."}
-
-## Техническая архитектура
-
-- Streamlit frontend для ввода идеи и просмотра хода встречи.
-- Python-оркестратор управляет фазами и состоянием.
-- LM Studio OpenAI-compatible API генерирует ответы агентов.
-- Приватные markdown-контексты разделяют информацию между ролями.
-- Результаты сохраняются в JSON и Markdown.
-
-## Риски
-
-{risks}
-
-## План разработки на 4-6 недель
-
-- Неделя 1: уточнить ICP, сценарии, ограничения и критерии успешного MVP.
-- Неделя 2: собрать прототип ключевого workflow и базовую архитектуру.
-- Неделя 3: реализовать основные MVP-функции и простую авторизацию/роли.
-- Неделя 4: провести пилот с 2-3 потенциальными клиентами.
-- Неделя 5-6: доработать UX, безопасность, отчётность и подготовить демо продаж.
-
-## Итоговое решение команды
-
-**{aggregated["final_decision"]}**
-
-Главный следующий шаг: {aggregated["next_step"]}
-"""
-
-    def _summarize_state_for_prompt(self, state: MeetingState) -> str:
-        if not state.phases:
-            return "Предыдущих ответов пока нет."
-        lines: list[str] = []
-        for phase, responses in state.phases.items():
-            lines.append(f"### {PHASE_LABELS[phase]}")
-            for response in responses:
-                bits = [response.summary]
-                if response.risks:
-                    bits.append("Риски: " + "; ".join(response.risks[:2]))
-                if response.mvp_features:
-                    bits.append("MVP: " + "; ".join(response.mvp_features[:3]))
-                lines.append(f"- {response.agent}: {' | '.join(bit for bit in bits if bit)}")
-        return "\n".join(lines)
+    def _short_transcript_summary(self, state: MeetingState) -> str:
+        valid_turns = [turn for turn in state.transcript.turns if turn.status != "failed"]
+        if not valid_turns:
+            return "Пока нет реплик."
+        recent = valid_turns[-8:]
+        return "\n".join(
+            f"- {turn.agent} / {PHASE_LABELS[turn.phase]}: {turn.payload.summary}"
+            for turn in recent
+        )
 
     @staticmethod
     def _read_private_context(path: Path) -> str:
         if not path.exists():
             return "Приватный контекст не найден."
         return path.read_text(encoding="utf-8").strip()
+
+    @staticmethod
+    def _project_mode_label(mode: ProjectMode) -> str:
+        return {
+            "new_saas": "Новый B2B SaaS",
+            "feature_in_existing_product": "Новая фича в существующем продукте",
+        }[mode]
+
+    @staticmethod
+    def _append_list(lines: list[str], title: str, values: list[str]) -> None:
+        if values:
+            lines.append(f"**{title}:**")
+            for value in values:
+                lines.append(f"- {value}")
+            lines.append("")
+
+    @staticmethod
+    def _append_plain_list(lines: list[str], values: list[str], empty: str) -> None:
+        if values:
+            for value in values:
+                lines.append(f"- {value}")
+        else:
+            lines.append(f"- {empty}")
+
+    @staticmethod
+    def _collect_unique(values) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized = value.strip()
+            if normalized and normalized not in seen:
+                result.append(normalized)
+                seen.add(normalized)
+        return result

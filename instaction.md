@@ -1,82 +1,89 @@
-# Инструкция: подключение Qwen в аудитории через LM Studio
+# Инструкция: переключение моделей LM Studio
 
-Рекомендуемая модель для аудитории с RTX 4060:
+В проекте есть два готовых окружения:
 
-```text
-qwen/qwen3-8b
+- дома: `Gemma 4 E4B` через `.env.gemma`;
+- на практике: `Qwen 3.5 9B` через `.env.qwen`.
+
+Код менять не нужно. Меняется только файл `.env`.
+
+## Домашний компьютер: Gemma 4 E4B
+
+Текущий рабочий `.env` уже настроен под домашнюю модель:
+
+```env
+LM_STUDIO_BASE_URL=http://localhost:1234/v1
+LM_STUDIO_API_KEY=lm-studio
+LM_STUDIO_MODEL=google/gemma-4-e4b
+LM_STUDIO_TIMEOUT_SECONDS=45
+LM_STUDIO_MAX_TOKENS=350
 ```
 
-Квантизация:
-
-```text
-Q4_K_M
-```
-
-## 1. Подготовить LM Studio
-
-1. Открыть LM Studio.
-2. Найти и скачать модель `qwen/qwen3-8b`.
-3. Выбрать квантизацию `Q4_K_M`.
-4. Перейти в раздел Local Server / Developer.
-5. Запустить сервер на порту `1234`.
-
-## 2. Вариант через CLI `lms`
-
-Если доступна команда `lms`, можно запустить всё из PowerShell:
+Если нужно восстановить домашнюю конфигурацию:
 
 ```powershell
-lms server start --port 1234
-lms load qwen/qwen3-8b --identifier qwen3-8b --context-length 8192 -y
+Copy-Item .env.gemma .env -Force
 ```
 
-Проверить, что модель загружена:
+Проверить, что модель загружена в LM Studio:
 
 ```powershell
 lms ps
 ```
 
-В списке должна быть загруженная модель с identifier:
+В списке должен быть identifier:
 
 ```text
-qwen3-8b
+google/gemma-4-e4b
 ```
 
-## 3. Настроить проект
+Если identifier отличается, нужно поставить его в `LM_STUDIO_MODEL`.
 
-В файле `.env` в корне проекта нужно указать модель:
+## Аудитория: Qwen 3.5 9B
+
+Для практики подготовлен файл:
+
+```text
+.env.qwen
+```
+
+Ожидаемая конфигурация:
 
 ```env
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 LM_STUDIO_API_KEY=lm-studio
-LM_STUDIO_MODEL=qwen3-8b
-LM_STUDIO_TIMEOUT_SECONDS=45
-LM_STUDIO_MAX_TOKENS=350
+LM_STUDIO_MODEL=qwen3.5-9b
+LM_STUDIO_TIMEOUT_SECONDS=60
+LM_STUDIO_MAX_TOKENS=450
 ```
 
-Если ответы всё ещё часто уходят в fallback из-за таймаута, можно увеличить значения:
+На компьютере в аудитории:
 
-```env
-LM_STUDIO_TIMEOUT_SECONDS=90
-LM_STUDIO_MAX_TOKENS=500
+```powershell
+Copy-Item .env.qwen .env -Force
 ```
 
-## 4. Код менять не нужно
+Затем запустить LM Studio server:
 
-Код проекта менять не требуется, если:
-
-- LM Studio server работает на `http://localhost:1234/v1`;
-- в `.env` указан правильный `LM_STUDIO_MODEL`;
-- identifier модели совпадает с тем, что показывает `lms ps`.
-
-Если в `lms ps` identifier отличается, нужно поставить именно его:
-
-```env
-LM_STUDIO_MODEL=identifier-из-lms-ps
+```powershell
+lms server start --port 1234
 ```
 
-## 5. Запустить проект
+Загрузить модель. Если в LM Studio модель называется иначе, identifier можно выбрать свой:
 
-В PowerShell:
+```powershell
+lms load qwen/qwen3.5-9b --identifier qwen3.5-9b --context-length 8192 -y
+```
+
+Проверить:
+
+```powershell
+lms ps
+```
+
+Важно: значение `LM_STUDIO_MODEL` в `.env` должно совпадать с `identifier` из `lms ps`.
+
+## Запуск проекта
 
 ```powershell
 cd F:\AI_Product_Council_Project
@@ -84,19 +91,24 @@ uv sync
 uv run streamlit run app.py
 ```
 
-Открыть в браузере:
+Открыть:
 
 ```text
 http://localhost:8501
 ```
 
-## 6. Проверить работу через Qwen
+## Как проверить, что работает настоящая модель
 
-1. В Streamlit открыть sidebar.
-2. Выключить галочку `Быстрый демо-режим`.
-3. Ввести идею B2B SaaS или оставить пример.
-4. Нажать `Запустить совет`.
+1. В интерфейсе не включать `Демо без LLM`.
+2. Нажать `1. Получить вопросы агентов`.
+3. Если вопросы появились со статусом `llm` или `repaired`, модель отвечает.
+4. Ответить на вопросы.
+5. Нажать `2. Провести созвон`.
+6. Проверить, что в метриках есть ответы `LLM`, а не только `Failed`.
 
-Если режим быстрый выключен, приложение обращается к LM Studio и использует модель Qwen.
+Если много `Failed`, увеличьте таймаут:
 
-Если отдельные агенты показывают fallback-ответы, это значит, что модель не успела вернуть валидный JSON за заданный таймаут. В этом случае можно увеличить `LM_STUDIO_TIMEOUT_SECONDS`.
+```env
+LM_STUDIO_TIMEOUT_SECONDS=90
+LM_STUDIO_MAX_TOKENS=600
+```

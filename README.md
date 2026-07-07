@@ -1,30 +1,67 @@
 # AI Product Council
 
-MVP мультиагентного симулятора продуктового совета. Пользователь описывает идею B2B SaaS, агенты с разными ролями обсуждают её через локальную LLM в LM Studio, голосуют и формируют итоговый проект-план.
+MVP мультиагентной системы, которая имитирует рабочий созвон IT-команды по созданию нового B2B SaaS или внедрению новой фичи в существующий продукт.
+
+Пользователь вводит идею, ограничения и ожидаемый результат. Агенты с разными ролями задают уточняющие вопросы, пользователь отвечает, после чего агенты проводят обсуждение, предлагают MVP/scope, голосуют и формируют два Markdown-документа:
+
+- `meeting_transcript.md` — протокол созвона;
+- `final_plan.md` — итоговый MVP / feature plan.
 
 ## Запуск
 
-1. Установите зависимости:
+1. Установить зависимости:
 
 ```bash
 uv sync
 ```
 
-2. Запустите LM Studio local server с OpenAI-compatible API.
+2. Запустить LM Studio local server с OpenAI-compatible API.
 
-3. Создайте `.env` или используйте значения по умолчанию:
+3. Настроить `.env`.
+
+Для домашнего компьютера с Gemma:
+
+```bash
+cp .env.gemma .env
+```
+
+Для аудитории с Qwen:
+
+```bash
+cp .env.qwen .env
+```
+
+Текущий пример `.env`:
 
 ```env
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 LM_STUDIO_API_KEY=lm-studio
-LM_STUDIO_MODEL=local-model-name
+LM_STUDIO_MODEL=google/gemma-4-e4b
+LM_STUDIO_TIMEOUT_SECONDS=45
+LM_STUDIO_MAX_TOKENS=350
 ```
 
-4. Запустите интерфейс:
+4. Запустить интерфейс:
 
 ```bash
 uv run streamlit run app.py
 ```
+
+5. Открыть:
+
+```text
+http://localhost:8501
+```
+
+## Сценарий использования
+
+1. Выбрать тип задачи: новый B2B SaaS или новая фича.
+2. Ввести идею, ограничения и ожидаемый результат.
+3. Нажать `1. Получить вопросы агентов`.
+4. Ответить на вопросы агентов в одном текстовом поле.
+5. Нажать `2. Провести созвон`.
+6. Проверить ход созвона, статусы `llm/repaired/failed`, протокол и итоговый план.
+7. Сохранить Markdown и JSON в `outputs/`.
 
 ## Проверки
 
@@ -32,3 +69,26 @@ uv run streamlit run app.py
 uv run python -m compileall src app.py
 uv run pytest
 ```
+
+## Модели
+
+Домашняя модель:
+
+```text
+google/gemma-4-e4b
+```
+
+Модель для аудитории:
+
+```text
+qwen/qwen3.5-9b
+```
+
+Через LM Studio CLI:
+
+```powershell
+lms server start --port 1234
+lms load qwen/qwen3.5-9b --identifier qwen3.5-9b --context-length 8192 -y
+```
+
+Подробнее: `instaction.md`.

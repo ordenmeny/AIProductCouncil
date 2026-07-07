@@ -32,6 +32,11 @@ class LMStudioClient:
                 trust_env=False,
             )
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip()
+            if len(detail) > 1200:
+                detail = detail[:1200] + "...[truncated]"
+            raise LLMClientError(f"LM Studio API error: {exc}. Response body: {detail}") from exc
         except httpx.HTTPError as exc:
             raise LLMClientError(f"LM Studio API error: {exc}") from exc
 
