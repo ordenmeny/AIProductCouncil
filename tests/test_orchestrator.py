@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ai_product_council.config import Settings
 from ai_product_council.models import AgentRole, MeetingState, MeetingTurn
 from ai_product_council.orchestrator import CouncilOrchestrator
 
@@ -9,7 +10,7 @@ class FakeClient:
         self.responses = list(responses)
         self.messages = []
 
-    def chat(self, messages):
+    def chat(self, messages, **kwargs):
         self.messages.append(messages)
         if isinstance(self.responses[0], Exception):
             raise self.responses.pop(0)
@@ -48,7 +49,13 @@ def test_repair_invalid_json_object_once():
         ]
     )
     agent = make_agent()
-    orchestrator = CouncilOrchestrator(llm_client=client, agents=[agent])
+    settings = Settings(
+        base_url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        model="test-model",
+        enable_repair=True,
+    )
+    orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=[agent])
     state = MeetingState(idea="test")
 
     turn = orchestrator.ask_agent_turn(agent, "analysis", state)
@@ -124,10 +131,10 @@ def test_private_context_is_not_mixed_between_agents(tmp_path: Path):
     pm_messages = orchestrator.build_messages(pm, "analysis", state)
     tech_messages = orchestrator.build_messages(tech, "analysis", state)
 
-    assert "PM_SECRET" in pm_messages[0]["content"]
-    assert "TECH_SECRET" not in pm_messages[0]["content"]
-    assert "TECH_SECRET" in tech_messages[0]["content"]
-    assert "PM_SECRET" not in tech_messages[0]["content"]
+    assert "PM_SECRET" in pm_messages[1]["content"]
+    assert "TECH_SECRET" not in pm_messages[1]["content"]
+    assert "TECH_SECRET" in tech_messages[1]["content"]
+    assert "PM_SECRET" not in tech_messages[1]["content"]
 
 
 def test_markdown_outputs_include_transcript_and_final_plan():

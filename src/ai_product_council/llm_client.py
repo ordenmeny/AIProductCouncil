@@ -13,14 +13,19 @@ class LMStudioClient:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def chat(self, messages: list[dict[str, str]]) -> str:
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int | None = None,
+        timeout_seconds: float | None = None,
+    ) -> str:
         url = f"{self.settings.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.settings.api_key}"}
         payload = {
             "model": self.settings.model,
             "messages": messages,
             "temperature": self.settings.temperature,
-            "max_tokens": self.settings.max_tokens,
+            "max_tokens": max_tokens or self.settings.max_tokens,
             "stream": False,
         }
         try:
@@ -28,7 +33,7 @@ class LMStudioClient:
                 url,
                 headers=headers,
                 json=payload,
-                timeout=self.settings.timeout_seconds,
+                timeout=timeout_seconds or self.settings.timeout_seconds,
                 trust_env=False,
             )
             response.raise_for_status()

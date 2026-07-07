@@ -39,6 +39,9 @@ LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=google/gemma-4-e4b
 LM_STUDIO_TIMEOUT_SECONDS=45
 LM_STUDIO_MAX_TOKENS=350
+LM_STUDIO_QUESTION_MAX_TOKENS=160
+LM_STUDIO_TURN_MAX_TOKENS=260
+LM_STUDIO_ENABLE_REPAIR=false
 ```
 
 4. Запустить интерфейс:
@@ -92,3 +95,12 @@ lms load qwen/qwen3.5-9b --identifier qwen3.5-9b --context-length 8192 -y
 ```
 
 Подробнее: `instaction.md`.
+
+## Настройки генерации
+
+- `LM_STUDIO_MAX_TOKENS` — общий fallback-лимит ответа.
+- `LM_STUDIO_QUESTION_MAX_TOKENS` — лимит для уточняющих вопросов.
+- `LM_STUDIO_TURN_MAX_TOKENS` — лимит для реплик созвона.
+- `LM_STUDIO_ENABLE_REPAIR` — делать ли повторный запрос для исправления невалидного JSON.
+
+Для Gemma repair выключен, потому что модель часто уходит в reasoning и портит JSON. Для Qwen repair включён.

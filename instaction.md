@@ -17,6 +17,9 @@ LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=google/gemma-4-e4b
 LM_STUDIO_TIMEOUT_SECONDS=45
 LM_STUDIO_MAX_TOKENS=350
+LM_STUDIO_QUESTION_MAX_TOKENS=160
+LM_STUDIO_TURN_MAX_TOKENS=260
+LM_STUDIO_ENABLE_REPAIR=false
 ```
 
 Если нужно восстановить домашнюю конфигурацию:
@@ -55,6 +58,9 @@ LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=qwen3.5-9b
 LM_STUDIO_TIMEOUT_SECONDS=60
 LM_STUDIO_MAX_TOKENS=450
+LM_STUDIO_QUESTION_MAX_TOKENS=220
+LM_STUDIO_TURN_MAX_TOKENS=450
+LM_STUDIO_ENABLE_REPAIR=true
 ```
 
 На компьютере в аудитории:
@@ -111,4 +117,14 @@ http://localhost:8501
 ```env
 LM_STUDIO_TIMEOUT_SECONDS=90
 LM_STUDIO_MAX_TOKENS=600
+LM_STUDIO_QUESTION_MAX_TOKENS=260
+LM_STUDIO_TURN_MAX_TOKENS=600
 ```
+
+Если модель часто возвращает невалидный JSON, можно включить repair:
+
+```env
+LM_STUDIO_ENABLE_REPAIR=true
+```
+
+Для Gemma дома repair лучше держать выключенным: она часто начинает объяснять ход рассуждений вместо исправления JSON.

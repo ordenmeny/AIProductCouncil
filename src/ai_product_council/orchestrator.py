@@ -110,7 +110,12 @@ class CouncilOrchestrator:
 
     def ask_clarifying_question(self, agent: AgentRole, state: MeetingState) -> ClarifyingQuestion:
         messages = self._build_question_messages(agent, state)
-        raw, status, error = self._chat_with_repair(messages, QUESTION_SCHEMA)
+        raw, status, error = self._chat_with_repair(
+            messages,
+            QUESTION_SCHEMA,
+            max_tokens=self.settings.question_max_tokens,
+            allow_repair=self.settings.enable_repair,
+        )
         if status == "failed":
             return ClarifyingQuestion(
                 agent=agent.name,
@@ -132,7 +137,12 @@ class CouncilOrchestrator:
 
     def ask_agent_turn(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> MeetingTurn:
         messages = self.build_messages(agent=agent, phase=phase, state=state)
-        raw, status, error = self._chat_with_repair(messages, TURN_SCHEMA)
+        raw, status, error = self._chat_with_repair(
+            messages,
+            self._turn_schema(phase),
+            max_tokens=self.settings.turn_max_tokens,
+            allow_repair=self._allow_repair(),
+        )
         if status == "failed":
             return MeetingTurn(
                 agent=agent.name,
@@ -154,18 +164,24 @@ class CouncilOrchestrator:
 
     def build_messages(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> list[dict[str, str]]:
         private_context = self._read_private_context(agent.private_context_path)
-        system = self._agent_system_prompt(agent, private_context, TURN_SCHEMA)
+        system = (
+            "Return only JSON. No markdown. No reasoning. "
+            "Do not use quotation marks inside JSON string values. "
+            "Do not copy dots or placeholders. Replace all placeholders with real content. "
+            "Use short Russian values. "
+            f"{self._turn_schema(phase)}"
+        )
+        previous = self._short_transcript_summary(state)
         user = (
-            "/no_think\n"
-            f"Project mode: {self._project_mode_label(state.project_mode)}\n"
-            f"Idea:\n{state.idea}\n\n"
-            f"Constraints:\n{state.constraints or 'Не указаны'}\n\n"
-            f"Desired result:\n{state.desired_result or 'Не указан'}\n\n"
-            f"Clarifying questions:\n{self._format_questions(state)}\n\n"
-            f"User answers:\n{state.user_answer.text or 'Пользователь не дал дополнительных ответов.'}\n\n"
-            f"Current phase: {phase} ({PHASE_LABELS[phase]}).\n"
-            f"Previous meeting summary:\n{self._short_transcript_summary(state)}\n\n"
-            f"Instruction: {self._phase_instruction(phase)}"
+            f"Role: {agent.name}. "
+            f"Role hint: {private_context[:260]}. "
+            f"Project: {self._project_mode_label(state.project_mode)}. "
+            f"Idea: {state.idea[:500]}. "
+            f"Constraints: {(state.constraints or 'none')[:180]}. "
+            f"User answers: {(state.user_answer.text or 'none')[:500]}. "
+            f"Phase: {phase}. "
+            f"Previous: {previous[:500]}. "
+            f"Task: {self._phase_instruction(phase)}"
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -385,21 +401,29 @@ class CouncilOrchestrator:
         lines.extend(["", f"**Следующий шаг:** {aggregated['next_step']}", ""])
         return "\n".join(lines).strip() + "\n"
 
-    def _chat_with_repair(self, messages: list[dict[str, str]], schema: str) -> tuple[str, ResponseStatus, str | None]:
+    def _chat_with_repair(
+        self,
+        messages: list[dict[str, str]],
+        schema: str,
+        max_tokens: int | None = None,
+        allow_repair: bool = True,
+    ) -> tuple[str, ResponseStatus, str | None]:
         try:
-            raw = self.llm_client.chat(messages)
+            raw = self.llm_client.chat(messages, max_tokens=max_tokens)
         except LLMClientError as exc:
             return "", "failed", str(exc)
         try:
             AgentPayload.model_validate(extract_json_object(raw))
             return raw, "llm", None
         except Exception as exc:
+            if not allow_repair:
+                return raw, "failed", str(exc)
             repair_messages = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": f"Repair your answer. {schema}"},
             ]
             try:
-                repaired = self.llm_client.chat(repair_messages)
+                repaired = self.llm_client.chat(repair_messages, max_tokens=max_tokens)
                 AgentPayload.model_validate(extract_json_object(repaired))
                 return repaired, "repaired", str(exc)
             except Exception as repair_exc:
@@ -413,15 +437,18 @@ class CouncilOrchestrator:
             raise ValueError(f"Invalid payload from {agent_name} in {phase}: {exc}") from exc
 
     def _build_question_messages(self, agent: AgentRole, state: MeetingState) -> list[dict[str, str]]:
-        private_context = self._read_private_context(agent.private_context_path)
-        system = self._agent_system_prompt(agent, private_context, QUESTION_SCHEMA)
+        system = (
+            "Return only JSON. No markdown. No reasoning. "
+            "Do not use quotation marks inside JSON string values. "
+            "Do not copy dots or placeholders. Replace all placeholders with real content. "
+            'Schema: {"question":"...","summary":"..."}'
+        )
         user = (
-            "/no_think\n"
-            f"Project mode: {self._project_mode_label(state.project_mode)}\n"
-            f"Idea:\n{state.idea}\n\n"
-            f"Constraints:\n{state.constraints or 'Не указаны'}\n\n"
-            f"Desired result:\n{state.desired_result or 'Не указан'}\n\n"
-            "Ask exactly one question that is important for your role and changes the MVP/scope decision."
+            f"Role: {agent.name}. "
+            f"Project: {self._project_mode_label(state.project_mode)}. "
+            f"Idea: {state.idea[:500]}. "
+            f"Constraints: {(state.constraints or 'none')[:220]}. "
+            "Ask one important Russian question for deciding MVP scope."
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -443,6 +470,35 @@ class CouncilOrchestrator:
             "mvp_vote": "Проголосуй и назови топ-функции, риски и следующий шаг.",
             "clarifying_questions": "Задай один важный вопрос.",
         }[phase]
+
+    def _allow_repair(self) -> bool:
+        if not self.settings.enable_repair:
+            return False
+        is_real_lm_studio = isinstance(self.llm_client, LMStudioClient)
+        is_gemma = "gemma" in self.settings.model.lower()
+        return not (is_real_lm_studio and is_gemma)
+
+    def _turn_schema(self, phase: PhaseName) -> str:
+        schemas = {
+            "analysis": (
+                'Schema: {"summary":"...","arguments":["..."],'
+                '"risks":["..."],"confidence":3}'
+            ),
+            "debate": (
+                'Schema: {"summary":"...","arguments":["..."],'
+                '"risks":["..."],"confidence":3}'
+            ),
+            "mvp_proposal": (
+                'Schema: {"summary":"...","mvp_features":["..."],'
+                '"out_of_scope":["..."],"risks":["..."],"confidence":3}'
+            ),
+            "mvp_vote": (
+                'Schema: {"summary":"...","decision":"go_after_clarification",'
+                '"mvp_features":["..."],"risks":["..."],"next_step":"...","confidence":3}'
+            ),
+            "clarifying_questions": QUESTION_SCHEMA,
+        }
+        return schemas[phase]
 
     def _format_questions(self, state: MeetingState) -> str:
         if not state.questions:
