@@ -17,18 +17,18 @@ def get_default_agents() -> list[AgentRole]:
             description="Отвечает за ценность, пользователей, сценарии, MVP и приоритеты.",
             private_context_path=CONTEXT_DIR / "product_manager.md",
             system_prompt=(
-                "Ты Product Manager в B2B SaaS. Смотри на ICP, JTBD, пользовательскую боль, "
-                "первый полезный workflow и приоритизацию MVP."
+                "Ты Product Manager на рабочем IT-созвоне. Смотри на пользователя, проблему, "
+                "первый полезный сценарий, MVP и понятные критерии успеха."
             ),
         ),
         AgentRole(
-            name="B2B Sales / GTM Lead",
-            slug="sales_gtm",
-            description="Оценивает покупателя, продажи, цену, ICP и выход на рынок.",
+            name="Business Value / Adoption Lead",
+            slug="business_value",
+            description="Оценивает бизнес-ценность, внедрение, пользу и проверку спроса.",
             private_context_path=CONTEXT_DIR / "sales_gtm.md",
             system_prompt=(
-                "Ты B2B Sales / GTM Lead. Смотри на покупателя, экономический эффект, "
-                "каналы продаж, дизайн-партнёров, цену и первые коммерческие проверки."
+                "Ты Business Value / Adoption Lead. Смотри на пользу для заказчика, "
+                "экономию времени или денег, готовность команды внедрять решение и первые проверки ценности."
             ),
         ),
         AgentRole(
@@ -52,13 +52,13 @@ def get_default_agents() -> list[AgentRole]:
             ),
         ),
         AgentRole(
-            name="Security / Compliance Expert",
+            name="Security / Data Expert",
             slug="security",
-            description="Проверяет данные, доступы, безопасность и compliance-риски.",
+            description="Проверяет данные, доступы, безопасность и риски хранения информации.",
             private_context_path=CONTEXT_DIR / "security.md",
             system_prompt=(
-                "Ты Security / Compliance Expert. Смотри на клиентские данные, роли доступа, "
-                "audit trail, privacy, compliance и enterprise-ожидания."
+                "Ты Security / Data Expert. Смотри на данные, роли доступа, хранение, "
+                "приватность, загрузку файлов и минимальные меры безопасности для MVP."
             ),
         ),
         AgentRole(

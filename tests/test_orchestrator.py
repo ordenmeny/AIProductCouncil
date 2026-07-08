@@ -30,7 +30,7 @@ def make_agent(name="Product Manager", slug="product_manager", context_path=Path
 def test_parse_valid_agent_response():
     orchestrator = CouncilOrchestrator(llm_client=FakeClient([]), agents=[])
     turn = orchestrator.parse_agent_response(
-        '{"summary":"ok","confidence":4,"decision":"go","arguments":["a"]}',
+        '{"summary":"ok","confidence":4,"decision":"go","arguments":["a"],"insights":["i"]}',
         "Product Manager",
         "analysis",
     )
@@ -39,6 +39,7 @@ def test_parse_valid_agent_response():
     assert turn.phase == "analysis"
     assert turn.payload.summary == "ok"
     assert turn.payload.arguments == ["a"]
+    assert turn.payload.insights == ["i"]
 
 
 def test_repair_invalid_json_object_once():
@@ -91,6 +92,9 @@ def test_aggregate_votes_top_items():
                 "decision": "go",
                 "mvp_features": ["auth", "dashboard"],
                 "risks": ["security"],
+                "roadmap_items": ["week 1"],
+                "open_questions": ["who owns it?"],
+                "insights": ["manual workaround exists"],
                 "next_step": "interviews",
             },
         )
@@ -106,6 +110,8 @@ def test_aggregate_votes_top_items():
                 "decision": "go_after_clarification",
                 "mvp_features": ["auth", "csv"],
                 "risks": ["security", "pricing"],
+                "roadmap_items": ["week 2"],
+                "open_questions": ["what is success?"],
             },
         )
     )
@@ -114,6 +120,9 @@ def test_aggregate_votes_top_items():
 
     assert result["top_features"][0] == "auth"
     assert result["top_risks"][0] == "security"
+    assert result["roadmap_items"] == ["week 1", "week 2"]
+    assert result["open_questions"] == ["who owns it?", "what is success?"]
+    assert result["insights"] == ["manual workaround exists"]
     assert result["next_step"] == "interviews"
 
 
@@ -139,7 +148,7 @@ def test_private_context_is_not_mixed_between_agents(tmp_path: Path):
 
 def test_markdown_outputs_include_transcript_and_final_plan():
     state = MeetingState(
-        idea="B2B SaaS для КП",
+        idea="Сервис для подготовки заявок",
         constraints="4 недели",
         desired_result="MVP plan",
     )
@@ -149,7 +158,12 @@ def test_markdown_outputs_include_transcript_and_final_plan():
             role="product_manager",
             phase="analysis",
             status="llm",
-            payload={"summary": "Есть ценность", "risks": ["широкий scope"]},
+            payload={
+                "summary": "Есть ценность",
+                "risks": ["широкий scope"],
+                "open_questions": ["Кто согласует заявку?"],
+                "insights": ["Главная польза может быть в снижении ошибок."],
+            },
         )
     )
     state.transcript.add(
@@ -162,6 +176,7 @@ def test_markdown_outputs_include_transcript_and_final_plan():
                 "summary": "Можно запускать",
                 "decision": "go",
                 "mvp_features": ["CSV import"],
+                "roadmap_items": ["Неделя 1: уточнить форму заявки"],
                 "next_step": "pilot",
             },
         )
@@ -172,6 +187,24 @@ def test_markdown_outputs_include_transcript_and_final_plan():
     plan = orchestrator.build_final_plan_markdown(state)
 
     assert "# Протокол AI Product Council" in transcript
-    assert "B2B SaaS для КП" in transcript
-    assert "# Итоговый MVP / Feature Plan" in plan
+    assert "Сервис для подготовки заявок" in transcript
+    assert "# Итоговый план IT-созвона" in plan
     assert "CSV import" in plan
+    assert "## Roadmap на 4-6 недель" in plan
+    assert "## Риски" in plan
+    assert "## Вопросы к заказчику" in plan
+    assert "## Инсайты" in plan
+
+
+def test_default_prompts_do_not_force_b2b_saas():
+    orchestrator = CouncilOrchestrator(llm_client=FakeClient([]))
+    state = MeetingState(idea="Новый сервис для заявок")
+
+    all_messages = [
+        message["content"]
+        for agent in orchestrator.agents
+        for message in orchestrator.build_messages(agent, "analysis", state)
+    ]
+
+    assert not any("B2B SaaS" in message for message in all_messages)
+    assert not any("enterprise" in message.lower() for message in all_messages)

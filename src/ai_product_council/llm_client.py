@@ -13,6 +13,29 @@ class LMStudioClient:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def list_models(self, timeout_seconds: float = 5.0) -> list[str]:
+        url = f"{self.settings.base_url}/models"
+        headers = {"Authorization": f"Bearer {self.settings.api_key}"}
+        try:
+            response = httpx.get(
+                url,
+                headers=headers,
+                timeout=timeout_seconds,
+                trust_env=False,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise LLMClientError(f"LM Studio models API error: {exc}") from exc
+
+        data = response.json()
+        try:
+            return [item["id"] for item in data.get("data", []) if item.get("id")]
+        except (AttributeError, TypeError) as exc:
+            raise LLMClientError(f"Unexpected LM Studio models response: {data}") from exc
+
+    def is_model_available(self) -> bool:
+        return self.settings.model in self.list_models()
+
     def chat(
         self,
         messages: list[dict[str, str]],

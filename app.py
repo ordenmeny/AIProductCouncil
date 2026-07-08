@@ -43,10 +43,27 @@ def make_orchestrator(use_demo_without_llm: bool) -> CouncilOrchestrator:
     return CouncilOrchestrator(settings=load_settings(), llm_client=client)
 
 
+def ensure_model_ready(orchestrator: CouncilOrchestrator, use_demo_without_llm: bool) -> bool:
+    if use_demo_without_llm:
+        return True
+    try:
+        models = orchestrator.llm_client.list_models()
+    except LLMClientError as exc:
+        st.error(f"LM Studio недоступен: {exc}")
+        return False
+    if orchestrator.settings.model not in models:
+        st.error(
+            f"Модель `{orchestrator.settings.model}` не загружена в LM Studio. "
+            f"Сейчас доступны: {', '.join(models) or 'нет моделей'}."
+        )
+        return False
+    return True
+
+
 st.set_page_config(page_title="AI Product Council", layout="wide")
 
 st.title("AI Product Council")
-st.caption("Рабочий созвон ИИ-агентов для MVP нового B2B SaaS или новой фичи")
+st.caption("Рабочий созвон ИИ-агентов для MVP нового сервиса или фичи")
 
 settings = load_settings()
 
@@ -69,17 +86,19 @@ with st.sidebar:
 
 project_mode_label = st.radio(
     "Тип задачи",
-    ["Новый B2B SaaS", "Новая фича в существующем продукте"],
+    ["Новый сервис или внутренний инструмент", "Новая фича в существующем продукте"],
     horizontal=True,
 )
 project_mode: ProjectMode = (
-    "new_saas" if project_mode_label == "Новый B2B SaaS" else "feature_in_existing_product"
+    "new_service"
+    if project_mode_label == "Новый сервис или внутренний инструмент"
+    else "feature_in_existing_product"
 )
 
 default_idea = (
-    "B2B SaaS для автоматизации подготовки коммерческих предложений: "
-    "менеджеры загружают вводные клиента, система собирает КП по шаблонам, "
-    "учитывает прайсинг и помогает согласовать документ внутри компании."
+    "Внутренний сервис для подготовки заявок на закупку оборудования: "
+    "сотрудник описывает потребность, система помогает собрать требования, "
+    "проверяет обязательные поля и формирует черновик заявки для согласования."
 )
 
 idea = st.text_area("Идея продукта или фичи", value=default_idea, height=150)
@@ -90,7 +109,7 @@ constraints = st.text_area(
 )
 desired_result = st.text_area(
     "Какой результат нужен от совета",
-    value="Определить MVP, риски, архитектурный подход и следующий практический шаг.",
+    value="Определить MVP, roadmap на 4-6 недель, риски, вопросы к заказчику и следующий практический шаг.",
     height=80,
 )
 
@@ -101,6 +120,8 @@ if col_questions.button("1. Получить вопросы агентов", typ
         st.error("Введите идею продукта или фичи.")
     else:
         orchestrator = make_orchestrator(demo_without_llm)
+        if not ensure_model_ready(orchestrator, demo_without_llm):
+            st.stop()
         state = orchestrator.create_state(
             idea=idea,
             project_mode=project_mode,
@@ -139,6 +160,8 @@ if state:
 
     if st.button("2. Провести созвон"):
         orchestrator = make_orchestrator(demo_without_llm)
+        if not ensure_model_ready(orchestrator, demo_without_llm):
+            st.stop()
         orchestrator.set_user_answer(state, user_answer)
         progress = st.progress(0)
         total_steps = len(orchestrator.agents) * len(DISCUSSION_PHASES)
@@ -176,7 +199,7 @@ if state and state.transcript.turns:
                 st.write(turn.payload.summary)
                 st.json(turn.payload.model_dump(mode="json"))
 
-    tab_transcript, tab_plan = st.tabs(["Протокол созвона", "Итоговый MVP/feature-план"])
+    tab_transcript, tab_plan = st.tabs(["Протокол созвона", "Итоговый план"])
     with tab_transcript:
         st.markdown(state.transcript_markdown)
         st.download_button(

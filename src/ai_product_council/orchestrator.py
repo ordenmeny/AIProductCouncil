@@ -48,6 +48,9 @@ Return only JSON:
   "risks": ["0-3 risks"],
   "mvp_features": ["0-3 features"],
   "out_of_scope": ["0-3 items not for v1"],
+  "open_questions": ["0-3 questions for the customer"],
+  "insights": ["0-3 non-obvious useful thoughts"],
+  "roadmap_items": ["0-3 roadmap steps"],
   "decision": "go | go_after_clarification | no_go | pivot_or_narrow_mvp | unknown",
   "next_step": "one practical next step",
   "confidence": 1
@@ -98,7 +101,7 @@ class CouncilOrchestrator:
     def run_full_meeting(
         self,
         idea: str,
-        project_mode: ProjectMode = "new_saas",
+        project_mode: ProjectMode = "new_service",
         constraints: str = "",
         desired_result: str = "",
         user_answer_text: str = "",
@@ -215,12 +218,33 @@ class CouncilOrchestrator:
             for turn in valid_votes
             if turn.payload.next_step.strip()
         ]
+        open_questions = self._collect_unique(
+            question
+            for turn in state.transcript.turns
+            if turn.status != "failed"
+            for question in turn.payload.open_questions
+        )
+        insights = self._collect_unique(
+            insight
+            for turn in state.transcript.turns
+            if turn.status != "failed"
+            for insight in turn.payload.insights
+        )
+        roadmap_items = self._collect_unique(
+            item
+            for turn in state.transcript.turns
+            if turn.status != "failed"
+            for item in turn.payload.roadmap_items
+        )
         return {
             "decision_counts": dict(decisions),
             "final_decision": decisions.most_common(1)[0][0] if decisions else "unknown",
             "top_features": [item for item, _ in features.most_common(3)],
             "top_risks": [item for item, _ in risks.most_common(3)],
-            "next_step": next_steps[0] if next_steps else "Провести проблемные интервью и уточнить scope MVP.",
+            "open_questions": open_questions[:5],
+            "insights": insights[:5],
+            "roadmap_items": roadmap_items[:6],
+            "next_step": next_steps[0] if next_steps else "Уточнить главный сценарий, критерии успеха и scope MVP.",
         }
 
     def response_stats(self, state: MeetingState) -> dict[str, int]:
@@ -275,6 +299,9 @@ class CouncilOrchestrator:
                 self._append_list(lines, "Риски", turn.payload.risks)
                 self._append_list(lines, "MVP / scope", turn.payload.mvp_features)
                 self._append_list(lines, "Не входит в v1", turn.payload.out_of_scope)
+                self._append_list(lines, "Вопросы к заказчику", turn.payload.open_questions)
+                self._append_list(lines, "Инсайты", turn.payload.insights)
+                self._append_list(lines, "Roadmap", turn.payload.roadmap_items)
                 if phase == "mvp_vote":
                     lines.append(f"- Решение: `{turn.payload.decision}`")
                     lines.append(f"- Следующий шаг: {turn.payload.next_step or 'Не указан'}")
@@ -303,18 +330,27 @@ class CouncilOrchestrator:
         risks = aggregated["top_risks"] or self._collect_unique(
             risk for turn in analyses for risk in turn.payload.risks
         )[:3]
+        roadmap = aggregated["roadmap_items"] or self._collect_unique(
+            item for turn in proposals + votes for item in turn.payload.roadmap_items
+        )[:6]
+        open_questions = aggregated["open_questions"] or self._collect_unique(
+            question for turn in analyses + proposals + votes for question in turn.payload.open_questions
+        )[:5]
+        insights = aggregated["insights"] or self._collect_unique(
+            insight for turn in analyses + proposals + votes for insight in turn.payload.insights
+        )[:5]
         out_of_scope = self._collect_unique(
             item for turn in proposals for item in turn.payload.out_of_scope
         )[:5]
 
         lines = [
-            "# Итоговый MVP / Feature Plan",
+            "# Итоговый план IT-созвона",
             "",
-            "## Краткое описание",
+            "## Суть задачи",
             "",
             state.idea,
             "",
-            "## Целевой клиент и ценность",
+            "## Ценность и рабочий сценарий",
             "",
         ]
         if analyses:
@@ -329,7 +365,21 @@ class CouncilOrchestrator:
         lines.extend(["", "## Что не входит в первую версию", ""])
         self._append_plain_list(lines, out_of_scope, "Не определено")
 
-        lines.extend(["", "## Архитектура MVP", ""])
+        lines.extend(["", "## Roadmap на 4-6 недель", ""])
+        if roadmap:
+            self._append_plain_list(lines, roadmap, "Не определено")
+        else:
+            lines.extend(
+                [
+                    "- Неделя 1: уточнить основной сценарий, пользователя и критерии успеха.",
+                    "- Неделя 2: собрать прототип без сложных интеграций.",
+                    "- Неделя 3: реализовать ключевые функции MVP и базовое хранение данных.",
+                    "- Неделя 4: провести пилот на 2-3 реальных сценариях.",
+                    "- Неделя 5-6: доработать UX, безопасность, отчётность и принять решение о следующей версии.",
+                ]
+            )
+
+        lines.extend(["", "## Технический подход", ""])
         tech_turns = [turn for turn in analyses + proposals if turn.role == "tech_lead"]
         if tech_turns:
             for turn in tech_turns:
@@ -357,15 +407,15 @@ class CouncilOrchestrator:
         else:
             lines.append("- Проверить основной пользовательский workflow на 2-3 реальных сценариях.")
 
-        lines.extend(["", "## GTM / Rollout", ""])
-        sales_turns = [turn for turn in analyses + proposals if turn.role == "sales_gtm"]
-        if sales_turns:
-            for turn in sales_turns:
+        lines.extend(["", "## Внедрение и проверка ценности", ""])
+        business_turns = [turn for turn in analyses + proposals if turn.role == "business_value"]
+        if business_turns:
+            for turn in business_turns:
                 lines.append(f"- {turn.payload.summary}")
         else:
-            lines.append("- Найти 2-3 дизайн-партнёра и проверить готовность к пилоту.")
+            lines.append("- Найти 2-3 будущих пользователя или внутренних заказчика и проверить пользу на пилоте.")
 
-        lines.extend(["", "## Security / Compliance", ""])
+        lines.extend(["", "## Данные и безопасность", ""])
         security_turns = [turn for turn in analyses + proposals if turn.role == "security"]
         if security_turns:
             for turn in security_turns:
@@ -375,26 +425,16 @@ class CouncilOrchestrator:
         else:
             lines.append("- Зафиксировать требования к данным, доступам и хранению до пилота.")
 
-        lines.extend(["", "## Топ-3 риска", ""])
+        lines.extend(["", "## Риски", ""])
         self._append_plain_list(lines, risks, "Не определено")
 
-        lines.extend(
-            [
-                "",
-                "## План на 4-6 недель",
-                "",
-                "- Неделя 1: уточнить ICP, пользовательский workflow и критерии успеха пилота.",
-                "- Неделя 2: собрать прототип основного сценария без сложных интеграций.",
-                "- Неделя 3: реализовать MVP-функции, базовое хранение данных и экспорт результата.",
-                "- Неделя 4: провести пилот с 2-3 пользователями или командами.",
-                "- Неделя 5-6: доработать UX, безопасность, отчётность и подготовить решение go/no-go.",
-                "",
-                "## Итоговое решение команды",
-                "",
-                f"**{aggregated['final_decision']}**",
-                "",
-            ]
-        )
+        lines.extend(["", "## Вопросы к заказчику", ""])
+        self._append_plain_list(lines, open_questions, "Не определено")
+
+        lines.extend(["", "## Инсайты", ""])
+        self._append_plain_list(lines, insights, "Не определено")
+
+        lines.extend(["", "## Итоговое решение команды", "", f"**{aggregated['final_decision']}**", ""])
         if votes:
             for turn in votes:
                 lines.append(f"- **{turn.agent}:** `{turn.payload.decision}` — {turn.payload.summary}")
@@ -448,7 +488,7 @@ class CouncilOrchestrator:
             f"Project: {self._project_mode_label(state.project_mode)}. "
             f"Idea: {state.idea[:500]}. "
             f"Constraints: {(state.constraints or 'none')[:220]}. "
-            "Ask one important Russian question for deciding MVP scope."
+            "Ask one important Russian question for deciding MVP scope, implementation risks, or adoption."
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -464,10 +504,10 @@ class CouncilOrchestrator:
 
     def _phase_instruction(self, phase: PhaseName) -> str:
         return {
-            "analysis": "Дай позицию своей роли: ценность, ограничения, риски и что проверить.",
-            "debate": "Отреагируй на предыдущие реплики: согласись, поспорь или уточни риск.",
-            "mvp_proposal": "Предложи scope первой версии: что входит, что не входит.",
-            "mvp_vote": "Проголосуй и назови топ-функции, риски и следующий шаг.",
+            "analysis": "Дай позицию своей роли: ценность, ограничения, риски, вопросы к заказчику и неочевидный инсайт.",
+            "debate": "Отреагируй на предыдущие реплики: согласись, поспорь или уточни риск, добавь полезный инсайт.",
+            "mvp_proposal": "Предложи scope первой версии: что входит, что не входит, и шаги roadmap.",
+            "mvp_vote": "Проголосуй и назови топ-функции, риски, вопросы к заказчику, инсайты и следующий шаг.",
             "clarifying_questions": "Задай один важный вопрос.",
         }[phase]
 
@@ -482,19 +522,20 @@ class CouncilOrchestrator:
         schemas = {
             "analysis": (
                 'Schema: {"summary":"...","arguments":["..."],'
-                '"risks":["..."],"confidence":3}'
+                '"risks":["..."],"open_questions":["..."],"insights":["..."],"confidence":3}'
             ),
             "debate": (
                 'Schema: {"summary":"...","arguments":["..."],'
-                '"risks":["..."],"confidence":3}'
+                '"risks":["..."],"insights":["..."],"confidence":3}'
             ),
             "mvp_proposal": (
                 'Schema: {"summary":"...","mvp_features":["..."],'
-                '"out_of_scope":["..."],"risks":["..."],"confidence":3}'
+                '"out_of_scope":["..."],"risks":["..."],"roadmap_items":["..."],"open_questions":["..."],"confidence":3}'
             ),
             "mvp_vote": (
                 'Schema: {"summary":"...","decision":"go_after_clarification",'
-                '"mvp_features":["..."],"risks":["..."],"next_step":"...","confidence":3}'
+                '"mvp_features":["..."],"risks":["..."],"roadmap_items":["..."],"open_questions":["..."],'
+                '"insights":["..."],"next_step":"...","confidence":3}'
             ),
             "clarifying_questions": QUESTION_SCHEMA,
         }
@@ -527,7 +568,7 @@ class CouncilOrchestrator:
     @staticmethod
     def _project_mode_label(mode: ProjectMode) -> str:
         return {
-            "new_saas": "Новый B2B SaaS",
+            "new_service": "Новый сервис или внутренний инструмент",
             "feature_in_existing_product": "Новая фича в существующем продукте",
         }[mode]
 

@@ -3,13 +3,13 @@
 В проекте есть два готовых окружения:
 
 - дома: `Gemma 4 E4B` через `.env.gemma`;
-- на практике: `Qwen 3.5 9B` через `.env.qwen`.
+- на практике или в аудитории: `Qwen 3.5 9B` через `.env.qwen`.
 
 Код менять не нужно. Меняется только файл `.env`.
 
 ## Домашний компьютер: Gemma 4 E4B
 
-Текущий рабочий `.env` уже настроен под домашнюю модель:
+Текущий рабочий `.env` можно настроить под домашнюю модель:
 
 ```env
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
@@ -40,11 +40,11 @@ lms ps
 google/gemma-4-e4b
 ```
 
-Если identifier отличается, нужно поставить его в `LM_STUDIO_MODEL`.
+Если identifier отличается, нужно указать его в `LM_STUDIO_MODEL`.
 
 ## Аудитория: Qwen 3.5 9B
 
-Для практики подготовлен файл:
+Для аудитории подготовлен файл:
 
 ```text
 .env.qwen
@@ -56,10 +56,10 @@ google/gemma-4-e4b
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 LM_STUDIO_API_KEY=lm-studio
 LM_STUDIO_MODEL=qwen3.5-9b
-LM_STUDIO_TIMEOUT_SECONDS=60
-LM_STUDIO_MAX_TOKENS=450
-LM_STUDIO_QUESTION_MAX_TOKENS=220
-LM_STUDIO_TURN_MAX_TOKENS=450
+LM_STUDIO_TIMEOUT_SECONDS=90
+LM_STUDIO_MAX_TOKENS=700
+LM_STUDIO_QUESTION_MAX_TOKENS=260
+LM_STUDIO_TURN_MAX_TOKENS=700
 LM_STUDIO_ENABLE_REPAIR=true
 ```
 
@@ -87,7 +87,7 @@ lms load qwen/qwen3.5-9b --identifier qwen3.5-9b --context-length 8192 -y
 lms ps
 ```
 
-Важно: значение `LM_STUDIO_MODEL` в `.env` должно совпадать с `identifier` из `lms ps`.
+Важно: значение `LM_STUDIO_MODEL` в `.env` должно совпадать с identifier из `lms ps`.
 
 ## Запуск проекта
 

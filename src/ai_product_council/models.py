@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-ProjectMode = Literal["new_saas", "feature_in_existing_product"]
+ProjectMode = Literal["new_service", "feature_in_existing_product"]
 
 PhaseName = Literal[
     "clarifying_questions",
@@ -43,6 +43,9 @@ class AgentPayload(BaseModel):
     risks: list[str] = Field(default_factory=list)
     mvp_features: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    insights: list[str] = Field(default_factory=list)
+    roadmap_items: list[str] = Field(default_factory=list)
     decision: Decision = "unknown"
     next_step: str = ""
     confidence: int = Field(default=3, ge=1, le=5)
@@ -81,7 +84,7 @@ class MeetingTranscript(BaseModel):
 
 class MeetingState(BaseModel):
     idea: str
-    project_mode: ProjectMode = "new_saas"
+    project_mode: ProjectMode = "new_service"
     constraints: str = ""
     desired_result: str = ""
     started_at: datetime = Field(default_factory=datetime.now)
