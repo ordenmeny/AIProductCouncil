@@ -68,6 +68,18 @@ def test_empty_question_uses_fallback_question():
     assert "сценарий" in question.question
 
 
+def test_invalid_json_question_keeps_useful_raw_text():
+    client = FakeClient(["Кто будет покупать шрифт и как он поймёт условия лицензии?"])
+    agent = make_agent()
+    orchestrator = CouncilOrchestrator(llm_client=client, agents=[agent])
+    state = MeetingState(idea="test")
+
+    question = orchestrator.ask_clarifying_question(agent, state)
+
+    assert question.status == "fallback"
+    assert question.question == "Кто будет покупать шрифт и как он поймёт условия лицензии?"
+
+
 def test_failed_turn_uses_fallback_payload():
     client = FakeClient(["not json", "still not json"])
     agent = make_agent()
@@ -80,6 +92,19 @@ def test_failed_turn_uses_fallback_payload():
     assert turn.payload.summary
     assert turn.payload.mvp_features
     assert turn.payload.decision == "go_after_clarification"
+
+
+def test_invalid_json_turn_keeps_useful_raw_text_as_summary():
+    raw = "Для сайта шрифтов MVP должен включать каталог, страницу шрифта, покупку лицензии и простую оплату."
+    client = FakeClient([raw, "still not json"])
+    agent = make_agent()
+    orchestrator = CouncilOrchestrator(llm_client=client, agents=[agent])
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+
+    turn = orchestrator.ask_agent_turn(agent, "analysis", state)
+
+    assert turn.status == "fallback"
+    assert turn.payload.summary == raw
 
 
 def test_repair_invalid_json_object_once():

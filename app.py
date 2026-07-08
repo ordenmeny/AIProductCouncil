@@ -60,6 +60,24 @@ def ensure_model_ready(orchestrator: CouncilOrchestrator, use_demo_without_llm: 
     return True
 
 
+def warn_if_fallback_dominates(state: MeetingState, context: str) -> None:
+    orchestrator = make_orchestrator(demo_without_llm)
+    stats = orchestrator.response_stats(state)
+    useful = stats["llm"] + stats["repaired"]
+    fallback = stats["fallback"]
+    if fallback and useful == 0:
+        st.warning(
+            f"{context}: все ответы получены через fallback. "
+            "Это аварийный режим: LM Studio доступен, но модель не вернула валидный JSON. "
+            "Для нормальной демонстрации проверьте модель, identifier и попробуйте Qwen/Gemma вместо reasoning-модели."
+        )
+    elif fallback > useful:
+        st.warning(
+            f"{context}: fallback сработал чаще, чем реальные ответы LLM. "
+            "Результат можно показать как отказоустойчивость, но содержательно лучше перезапустить с более стабильной моделью."
+        )
+
+
 st.set_page_config(page_title="AI Product Council", layout="wide")
 
 st.title("AI Product Council")
@@ -131,6 +149,7 @@ if col_questions.button("1. Получить вопросы агентов", typ
         with st.spinner("Агенты формируют уточняющие вопросы..."):
             orchestrator.collect_questions(state)
         st.session_state["meeting_state"] = state
+        warn_if_fallback_dominates(state, "Уточняющие вопросы")
         st.success("Вопросы собраны. Теперь ответьте на них ниже.")
 
 if col_reset.button("Сбросить"):
@@ -176,6 +195,7 @@ if state:
             state.transcript_markdown = orchestrator.build_transcript_markdown(state)
             state.final_plan_markdown = orchestrator.build_final_plan_markdown(state)
         st.session_state["meeting_state"] = state
+        warn_if_fallback_dominates(state, "Созвон")
         st.success("Созвон завершён. Ниже протокол и итоговый план.")
 
 if state and state.transcript.turns:
@@ -188,6 +208,7 @@ if state and state.transcript.turns:
     col_repaired.metric("Repaired", stats["repaired"])
     col_failed.metric("Failed", stats["failed"])
     col_fallback.metric("Fallback", stats["fallback"])
+    warn_if_fallback_dominates(state, "Текущий результат")
 
     st.header("Ход созвона")
     for phase in DISCUSSION_PHASES:

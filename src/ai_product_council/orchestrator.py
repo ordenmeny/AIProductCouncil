@@ -471,6 +471,7 @@ class CouncilOrchestrator:
             raise ValueError(f"Invalid payload from {agent_name} in {phase}: {exc}") from exc
 
     def _fallback_question(self, agent: AgentRole, raw: str, error: str | None) -> ClarifyingQuestion:
+        raw_question = self._raw_text_to_question(raw)
         questions = {
             "product_manager": "Какой один пользовательский сценарий должен обязательно заработать в первой версии?",
             "business_value": "По какому измеримому признаку заказчик поймёт, что решение действительно полезно?",
@@ -482,7 +483,8 @@ class CouncilOrchestrator:
         return ClarifyingQuestion(
             agent=agent.name,
             role=agent.slug,
-            question=questions.get(agent.slug, "Какое главное ограничение нужно учесть перед выбором MVP?"),
+            question=raw_question
+            or questions.get(agent.slug, "Какое главное ограничение нужно учесть перед выбором MVP?"),
             status="fallback",
             error=error,
             raw_text=raw,
@@ -496,6 +498,7 @@ class CouncilOrchestrator:
         raw: str,
         error: str | None,
     ) -> MeetingTurn:
+        raw_summary = self._raw_text_to_summary(raw)
         role_focus = {
             "product_manager": "сфокусировать MVP на одном основном сценарии",
             "business_value": "проверить измеримую пользу и готовность внедрять решение",
@@ -506,20 +509,20 @@ class CouncilOrchestrator:
         }.get(agent.slug, "сфокусировать первую версию")
         payloads = {
             "analysis": AgentPayload(
-                summary=f"Нужно {role_focus}.",
+                summary=raw_summary or f"Нужно {role_focus}.",
                 arguments=[f"Для задачи {state.idea[:80]} первая версия должна быть проверяемой и небольшой."],
                 risks=["Слишком широкий scope может сорвать MVP за 4-6 недель."],
                 open_questions=["Какой результат пользователь должен получить в первом успешном сценарии?"],
                 insights=["Главная ценность MVP может быть не в количестве функций, а в снятии одного узкого места процесса."],
             ),
             "debate": AgentPayload(
-                summary=f"Поддерживаю необходимость сузить решение: нужно {role_focus}.",
+                summary=raw_summary or f"Поддерживаю необходимость сузить решение: нужно {role_focus}.",
                 arguments=["Команде важно сначала доказать полезность одного процесса, а не строить полную систему."],
                 risks=["Без ясного критерия успеха обсуждение уйдёт в список желаемых функций."],
                 insights=["Спор агентов полезен, если приводит к ограничению первой версии."],
             ),
             "mvp_proposal": AgentPayload(
-                summary="Первая версия должна закрывать один основной workflow.",
+                summary=raw_summary or "Первая версия должна закрывать один основной workflow.",
                 mvp_features=["Ввод исходных данных", "Обработка основного сценария", "Экспорт или сохранение результата"],
                 out_of_scope=["Сложные интеграции", "Расширенная аналитика", "Несколько разных сценариев сразу"],
                 risks=["Нечёткие правила процесса могут усложнить реализацию."],
@@ -531,7 +534,7 @@ class CouncilOrchestrator:
                 open_questions=["Какие поля и правила обязательны для первого результата?"],
             ),
             "mvp_vote": AgentPayload(
-                summary="Запускать после уточнения scope и критериев успеха.",
+                summary=raw_summary or "Запускать после уточнения scope и критериев успеха.",
                 decision="go_after_clarification",
                 mvp_features=["Основной пользовательский сценарий", "Минимальное хранение данных", "Экспорт результата"],
                 risks=["Размытый scope", "Неясный владелец процесса"],
@@ -554,6 +557,40 @@ class CouncilOrchestrator:
             raw_text=raw,
             error=error,
         )
+
+    @staticmethod
+    def _raw_text_to_question(raw: str) -> str:
+        cleaned = CouncilOrchestrator._clean_raw_text(raw)
+        if not cleaned or "{" in cleaned[:20]:
+            return ""
+        sentences = [part.strip() for part in cleaned.replace("\n", " ").split("?") if part.strip()]
+        if not sentences:
+            return ""
+        first = sentences[0]
+        if len(first) < 12:
+            return ""
+        return first[:240].rstrip(".:,;") + "?"
+
+    @staticmethod
+    def _raw_text_to_summary(raw: str) -> str:
+        cleaned = CouncilOrchestrator._clean_raw_text(raw)
+        if not cleaned or len(cleaned) < 20:
+            return ""
+        if cleaned.startswith("{") and cleaned.endswith("}"):
+            return ""
+        return cleaned[:700].rstrip()
+
+    @staticmethod
+    def _clean_raw_text(raw: str) -> str:
+        cleaned = raw.strip()
+        if not cleaned:
+            return ""
+        for marker in ("```json", "```", "<think>", "</think>"):
+            cleaned = cleaned.replace(marker, " ")
+        cleaned = " ".join(cleaned.split())
+        if cleaned in {"...", "…", "not json", "still not json"}:
+            return ""
+        return cleaned
 
     @staticmethod
     def _payload_is_empty(payload: AgentPayload) -> bool:
