@@ -11,3 +11,11 @@ def test_extract_markdown_json_block():
 
 def test_extract_json_inside_text():
     assert extract_json_object('answer: {"a": 1}') == {"a": 1}
+
+
+def test_extract_first_json_when_model_adds_extra_data():
+    assert extract_json_object('{"a": 1}\n{"b": 2}') == {"a": 1}
+
+
+def test_extract_json_before_trailing_text():
+    assert extract_json_object('{"a": 1}\nExplanation after JSON') == {"a": 1}

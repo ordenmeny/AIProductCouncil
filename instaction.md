@@ -55,7 +55,7 @@ google/gemma-4-e4b
 ```env
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 LM_STUDIO_API_KEY=lm-studio
-LM_STUDIO_MODEL=qwen3.5-9b
+LM_STUDIO_MODEL=qwen/qwen3.5-9b
 LM_STUDIO_TIMEOUT_SECONDS=90
 LM_STUDIO_MAX_TOKENS=700
 LM_STUDIO_QUESTION_MAX_TOKENS=260
@@ -78,7 +78,7 @@ lms server start --port 1234
 Загрузить модель. Если в LM Studio модель называется иначе, identifier можно выбрать свой:
 
 ```powershell
-lms load qwen/qwen3.5-9b --identifier qwen3.5-9b --context-length 8192 -y
+lms load qwen/qwen3.5-9b --identifier qwen/qwen3.5-9b --context-length 8192 -y
 ```
 
 Проверить:

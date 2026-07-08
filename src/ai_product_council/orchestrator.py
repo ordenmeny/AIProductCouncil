@@ -35,22 +35,22 @@ DISCUSSION_PHASES: list[PhaseName] = ["analysis", "debate", "mvp_proposal", "mvp
 QUESTION_SCHEMA = """
 Return only JSON:
 {
-  "question": "one important Russian question",
-  "summary": "why this question matters"
+  "question": "concrete Russian question",
+  "summary": "why the answer changes the MVP"
 }
 """
 
 TURN_SCHEMA = """
 Return only JSON:
 {
-  "summary": "short Russian position",
-  "arguments": ["1-3 arguments"],
-  "risks": ["0-3 risks"],
-  "mvp_features": ["0-3 features"],
-  "out_of_scope": ["0-3 items not for v1"],
-  "open_questions": ["0-3 questions for the customer"],
-  "insights": ["0-3 non-obvious useful thoughts"],
-  "roadmap_items": ["0-3 roadmap steps"],
+  "summary": "short concrete Russian position",
+  "arguments": ["specific argument"],
+  "risks": ["specific risk"],
+  "mvp_features": ["specific MVP feature"],
+  "out_of_scope": ["specific item not for v1"],
+  "open_questions": ["specific question for the customer"],
+  "insights": ["specific non-obvious useful thought"],
+  "roadmap_items": ["specific roadmap step"],
   "decision": "go | go_after_clarification | no_go | pivot_or_narrow_mvp | unknown",
   "next_step": "one practical next step",
   "confidence": 1
@@ -120,15 +120,10 @@ class CouncilOrchestrator:
             allow_repair=self.settings.enable_repair,
         )
         if status == "failed":
-            return ClarifyingQuestion(
-                agent=agent.name,
-                role=agent.slug,
-                question="",
-                status=status,
-                error=error,
-                raw_text=raw,
-            )
+            return self._fallback_question(agent, raw, error)
         payload = self._parse_payload(raw, agent.name, "clarifying_questions")
+        if not payload.question.strip():
+            return self._fallback_question(agent, raw, "LLM returned an empty question")
         return ClarifyingQuestion(
             agent=agent.name,
             role=agent.slug,
@@ -147,20 +142,16 @@ class CouncilOrchestrator:
             allow_repair=self._allow_repair(),
         )
         if status == "failed":
-            return MeetingTurn(
-                agent=agent.name,
-                role=agent.slug,
-                phase=phase,
-                status=status,
-                raw_text=raw,
-                error=error,
-            )
+            return self._fallback_turn(agent, phase, state, raw, error)
+        payload = self._parse_payload(raw, agent.name, phase)
+        if self._payload_is_empty(payload):
+            return self._fallback_turn(agent, phase, state, raw, "LLM returned empty or placeholder content")
         return MeetingTurn(
             agent=agent.name,
             role=agent.slug,
             phase=phase,
             status=status,
-            payload=self._parse_payload(raw, agent.name, phase),
+            payload=payload,
             raw_text=raw,
             error=error,
         )
@@ -170,7 +161,8 @@ class CouncilOrchestrator:
         system = (
             "Return only JSON. No markdown. No reasoning. "
             "Do not use quotation marks inside JSON string values. "
-            "Do not copy dots or placeholders. Replace all placeholders with real content. "
+            "Never write ellipsis, placeholder text, TBD, or empty-looking content. "
+            "If a list has no useful items, return an empty array. "
             "Use short Russian values. "
             f"{self._turn_schema(phase)}"
         )
@@ -254,6 +246,7 @@ class CouncilOrchestrator:
             "llm": statuses.get("llm", 0),
             "repaired": statuses.get("repaired", 0),
             "failed": statuses.get("failed", 0),
+            "fallback": statuses.get("fallback", 0),
         }
 
     def build_transcript_markdown(self, state: MeetingState) -> str:
@@ -314,6 +307,7 @@ class CouncilOrchestrator:
                 f"- LLM: {stats['llm']}",
                 f"- Repaired: {stats['repaired']}",
                 f"- Failed: {stats['failed']}",
+                f"- Fallback: {stats['fallback']}",
                 "",
             ]
         )
@@ -476,12 +470,114 @@ class CouncilOrchestrator:
         except (ValueError, ValidationError, TypeError) as exc:
             raise ValueError(f"Invalid payload from {agent_name} in {phase}: {exc}") from exc
 
+    def _fallback_question(self, agent: AgentRole, raw: str, error: str | None) -> ClarifyingQuestion:
+        questions = {
+            "product_manager": "Какой один пользовательский сценарий должен обязательно заработать в первой версии?",
+            "business_value": "По какому измеримому признаку заказчик поймёт, что решение действительно полезно?",
+            "tech_lead": "Какие данные, интеграции и ограничения по срокам критичны для первой версии?",
+            "ux_researcher": "Кто будет первым пользователем и какое действие должно стать для него проще?",
+            "security": "Какие данные будут загружаться в систему и кому можно будет их видеть?",
+            "skeptic": "Что будет главным признаком, что идею нужно сузить или остановить?",
+        }
+        return ClarifyingQuestion(
+            agent=agent.name,
+            role=agent.slug,
+            question=questions.get(agent.slug, "Какое главное ограничение нужно учесть перед выбором MVP?"),
+            status="fallback",
+            error=error,
+            raw_text=raw,
+        )
+
+    def _fallback_turn(
+        self,
+        agent: AgentRole,
+        phase: PhaseName,
+        state: MeetingState,
+        raw: str,
+        error: str | None,
+    ) -> MeetingTurn:
+        role_focus = {
+            "product_manager": "сфокусировать MVP на одном основном сценарии",
+            "business_value": "проверить измеримую пользу и готовность внедрять решение",
+            "tech_lead": "выбрать простую реализацию без лишних интеграций",
+            "ux_researcher": "проверить понятность первого пользовательского пути",
+            "security": "минимизировать данные и явно описать доступы",
+            "skeptic": "сузить scope и проверить самый рискованный допуск",
+        }.get(agent.slug, "сфокусировать первую версию")
+        payloads = {
+            "analysis": AgentPayload(
+                summary=f"Нужно {role_focus}.",
+                arguments=[f"Для задачи {state.idea[:80]} первая версия должна быть проверяемой и небольшой."],
+                risks=["Слишком широкий scope может сорвать MVP за 4-6 недель."],
+                open_questions=["Какой результат пользователь должен получить в первом успешном сценарии?"],
+                insights=["Главная ценность MVP может быть не в количестве функций, а в снятии одного узкого места процесса."],
+            ),
+            "debate": AgentPayload(
+                summary=f"Поддерживаю необходимость сузить решение: нужно {role_focus}.",
+                arguments=["Команде важно сначала доказать полезность одного процесса, а не строить полную систему."],
+                risks=["Без ясного критерия успеха обсуждение уйдёт в список желаемых функций."],
+                insights=["Спор агентов полезен, если приводит к ограничению первой версии."],
+            ),
+            "mvp_proposal": AgentPayload(
+                summary="Первая версия должна закрывать один основной workflow.",
+                mvp_features=["Ввод исходных данных", "Обработка основного сценария", "Экспорт или сохранение результата"],
+                out_of_scope=["Сложные интеграции", "Расширенная аналитика", "Несколько разных сценариев сразу"],
+                risks=["Нечёткие правила процесса могут усложнить реализацию."],
+                roadmap_items=[
+                    "Неделя 1: уточнить сценарий и критерии успеха",
+                    "Неделя 2-3: собрать прототип и основную логику",
+                    "Неделя 4: провести пилот и собрать обратную связь",
+                ],
+                open_questions=["Какие поля и правила обязательны для первого результата?"],
+            ),
+            "mvp_vote": AgentPayload(
+                summary="Запускать после уточнения scope и критериев успеха.",
+                decision="go_after_clarification",
+                mvp_features=["Основной пользовательский сценарий", "Минимальное хранение данных", "Экспорт результата"],
+                risks=["Размытый scope", "Неясный владелец процесса"],
+                roadmap_items=[
+                    "Неделя 1: зафиксировать MVP",
+                    "Неделя 2-3: реализовать первую версию",
+                    "Неделя 4-6: пилот и доработка",
+                ],
+                open_questions=["Кто принимает итоговое решение по результату пилота?"],
+                insights=["Лучший следующий шаг — не расширять идею, а проверить один полезный сценарий."],
+                next_step="Провести короткое уточнение требований и зафиксировать MVP на один сценарий.",
+            ),
+        }
+        return MeetingTurn(
+            agent=agent.name,
+            role=agent.slug,
+            phase=phase,
+            status="fallback",
+            payload=payloads[phase],
+            raw_text=raw,
+            error=error,
+        )
+
+    @staticmethod
+    def _payload_is_empty(payload: AgentPayload) -> bool:
+        return not any(
+            [
+                payload.summary.strip(),
+                payload.question.strip(),
+                payload.arguments,
+                payload.risks,
+                payload.mvp_features,
+                payload.out_of_scope,
+                payload.open_questions,
+                payload.insights,
+                payload.roadmap_items,
+                payload.next_step.strip(),
+            ]
+        )
+
     def _build_question_messages(self, agent: AgentRole, state: MeetingState) -> list[dict[str, str]]:
         system = (
             "Return only JSON. No markdown. No reasoning. "
             "Do not use quotation marks inside JSON string values. "
-            "Do not copy dots or placeholders. Replace all placeholders with real content. "
-            'Schema: {"question":"...","summary":"..."}'
+            "Never write ellipsis, placeholder text, TBD, or empty-looking content. "
+            'Schema keys: question string, summary string.'
         )
         user = (
             f"Role: {agent.name}. "
@@ -521,21 +617,22 @@ class CouncilOrchestrator:
     def _turn_schema(self, phase: PhaseName) -> str:
         schemas = {
             "analysis": (
-                'Schema: {"summary":"...","arguments":["..."],'
-                '"risks":["..."],"open_questions":["..."],"insights":["..."],"confidence":3}'
+                "Schema keys: summary string, arguments string array, risks string array, "
+                "open_questions string array, insights string array, confidence integer."
             ),
             "debate": (
-                'Schema: {"summary":"...","arguments":["..."],'
-                '"risks":["..."],"insights":["..."],"confidence":3}'
+                "Schema keys: summary string, arguments string array, risks string array, "
+                "insights string array, confidence integer."
             ),
             "mvp_proposal": (
-                'Schema: {"summary":"...","mvp_features":["..."],'
-                '"out_of_scope":["..."],"risks":["..."],"roadmap_items":["..."],"open_questions":["..."],"confidence":3}'
+                "Schema keys: summary string, mvp_features string array, out_of_scope string array, "
+                "risks string array, roadmap_items string array, open_questions string array, confidence integer."
             ),
             "mvp_vote": (
-                'Schema: {"summary":"...","decision":"go_after_clarification",'
-                '"mvp_features":["..."],"risks":["..."],"roadmap_items":["..."],"open_questions":["..."],'
-                '"insights":["..."],"next_step":"...","confidence":3}'
+                "Schema keys: summary string, decision one of go go_after_clarification no_go "
+                "pivot_or_narrow_mvp unknown, mvp_features string array, risks string array, "
+                "roadmap_items string array, open_questions string array, insights string array, "
+                "next_step string, confidence integer."
             ),
             "clarifying_questions": QUESTION_SCHEMA,
         }

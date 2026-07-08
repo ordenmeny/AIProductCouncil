@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 ProjectMode = Literal["new_service", "feature_in_existing_product"]
@@ -25,7 +25,7 @@ Decision = Literal[
     "unknown",
 ]
 
-ResponseStatus = Literal["llm", "repaired", "failed"]
+ResponseStatus = Literal["llm", "repaired", "failed", "fallback"]
 
 
 class AgentRole(BaseModel):
@@ -49,6 +49,37 @@ class AgentPayload(BaseModel):
     decision: Decision = "unknown"
     next_step: str = ""
     confidence: int = Field(default=3, ge=1, le=5)
+
+    @field_validator("summary", "question", "next_step", mode="before")
+    @classmethod
+    def clean_placeholder_string(cls, value):
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return "" if normalized in {"...", "…", "-", "—"} else normalized
+
+    @field_validator(
+        "arguments",
+        "risks",
+        "mvp_features",
+        "out_of_scope",
+        "open_questions",
+        "insights",
+        "roadmap_items",
+        mode="before",
+    )
+    @classmethod
+    def clean_placeholder_list(cls, value):
+        if not isinstance(value, list):
+            return value
+        result: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            normalized = item.strip()
+            if normalized and normalized not in {"...", "…", "-", "—"}:
+                result.append(normalized)
+        return result
 
 
 class ClarifyingQuestion(BaseModel):

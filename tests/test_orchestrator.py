@@ -42,6 +42,46 @@ def test_parse_valid_agent_response():
     assert turn.payload.insights == ["i"]
 
 
+def test_placeholder_values_are_removed_from_payload():
+    orchestrator = CouncilOrchestrator(llm_client=FakeClient([]), agents=[])
+    turn = orchestrator.parse_agent_response(
+        '{"summary":"...","arguments":["...","реальный аргумент"],"risks":["…"],"confidence":3}',
+        "Product Manager",
+        "analysis",
+    )
+
+    assert turn.payload.summary == ""
+    assert turn.payload.arguments == ["реальный аргумент"]
+    assert turn.payload.risks == []
+
+
+def test_empty_question_uses_fallback_question():
+    client = FakeClient(['{"question":"...","summary":"..."}'])
+    agent = make_agent()
+    orchestrator = CouncilOrchestrator(llm_client=client, agents=[agent])
+    state = MeetingState(idea="test")
+
+    question = orchestrator.ask_clarifying_question(agent, state)
+
+    assert question.status == "fallback"
+    assert question.question
+    assert "сценарий" in question.question
+
+
+def test_failed_turn_uses_fallback_payload():
+    client = FakeClient(["not json", "still not json"])
+    agent = make_agent()
+    orchestrator = CouncilOrchestrator(llm_client=client, agents=[agent])
+    state = MeetingState(idea="test")
+
+    turn = orchestrator.ask_agent_turn(agent, "mvp_vote", state)
+
+    assert turn.status == "fallback"
+    assert turn.payload.summary
+    assert turn.payload.mvp_features
+    assert turn.payload.decision == "go_after_clarification"
+
+
 def test_repair_invalid_json_object_once():
     client = FakeClient(
         [
@@ -74,8 +114,8 @@ def test_failed_response_is_not_replaced_with_content():
 
     turn = orchestrator.ask_agent_turn(agent, "analysis", state)
 
-    assert turn.status == "failed"
-    assert turn.payload.summary == ""
+    assert turn.status == "fallback"
+    assert turn.payload.summary
     assert turn.error
 
 

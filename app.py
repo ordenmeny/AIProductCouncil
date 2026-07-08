@@ -183,10 +183,11 @@ if state and state.transcript.turns:
     orchestrator = make_orchestrator(demo_without_llm)
     stats = orchestrator.response_stats(state)
 
-    col_llm, col_repaired, col_failed = st.columns(3)
+    col_llm, col_repaired, col_failed, col_fallback = st.columns(4)
     col_llm.metric("LLM", stats["llm"])
     col_repaired.metric("Repaired", stats["repaired"])
     col_failed.metric("Failed", stats["failed"])
+    col_fallback.metric("Fallback", stats["fallback"])
 
     st.header("Ход созвона")
     for phase in DISCUSSION_PHASES:
