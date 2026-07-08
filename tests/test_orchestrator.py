@@ -55,6 +55,21 @@ def test_placeholder_values_are_removed_from_payload():
     assert turn.payload.risks == []
 
 
+def test_reasoning_inside_valid_json_is_removed():
+    orchestrator = CouncilOrchestrator(llm_client=FakeClient([]), agents=[])
+    turn = orchestrator.parse_agent_response(
+        '{"summary":"Thinking Process: Analyze the Request. '
+        'Для MVP нужен каталог шрифтов и покупка лицензии.",'
+        '"arguments":["Return only JSON. Schema keys. Проверить оплату."],"confidence":3}',
+        "Product Manager",
+        "analysis",
+    )
+
+    assert "Thinking Process" not in turn.payload.summary
+    assert "Analyze the Request" not in turn.payload.summary
+    assert "Return only JSON" not in " ".join(turn.payload.arguments)
+
+
 def test_empty_question_uses_fallback_question():
     client = FakeClient(['{"question":"...","summary":"..."}'])
     agent = make_agent()
@@ -78,6 +93,43 @@ def test_invalid_json_question_keeps_useful_raw_text():
 
     assert question.status == "fallback"
     assert question.question == "Кто будет покупать шрифт и как он поймёт условия лицензии?"
+
+
+def test_qwen_question_uses_text_mode_for_clean_question():
+    client = FakeClient(["Кто будет первым покупателем шрифта и какая лицензия ему нужна?"])
+    agent = make_agent()
+    settings = Settings(
+        base_url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        model="qwen/qwen3.5-9b",
+    )
+    orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=[agent])
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+
+    question = orchestrator.ask_clarifying_question(agent, state)
+
+    assert question.status == "text"
+    assert question.question == "Кто будет первым покупателем шрифта и какая лицензия ему нужна?"
+
+
+def test_reasoning_question_uses_domain_fallback_instead_of_raw_reasoning():
+    raw = "Thinking Process: Role: Product Manager. Analyze the Request: Constraints: MVP?"
+    client = FakeClient([raw])
+    agent = make_agent()
+    settings = Settings(
+        base_url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        model="qwen/qwen3.5-9b",
+    )
+    orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=[agent])
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+
+    question = orchestrator.ask_clarifying_question(agent, state)
+
+    assert question.status == "fallback"
+    assert question.fallback_reason == "deterministic"
+    assert "Thinking Process" not in question.question
+    assert "шрифт" in question.question
 
 
 def test_failed_turn_uses_fallback_payload():
@@ -105,6 +157,21 @@ def test_invalid_json_turn_keeps_useful_raw_text_as_summary():
 
     assert turn.status == "fallback"
     assert turn.payload.summary == raw
+
+
+def test_reasoning_turn_is_not_used_as_summary():
+    raw = "Thinking Process: Role: Tech Lead. Analyze the Request: Return only JSON. Schema keys."
+    client = FakeClient([raw, "still not json"])
+    agent = make_agent("Tech Lead", "tech_lead")
+    orchestrator = CouncilOrchestrator(llm_client=client, agents=[agent])
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+
+    turn = orchestrator.ask_agent_turn(agent, "analysis", state)
+
+    assert turn.status == "fallback"
+    assert turn.fallback_reason == "deterministic"
+    assert "Thinking Process" not in turn.payload.summary
+    assert "сайт продажи шрифтов" in turn.payload.summary
 
 
 def test_repair_invalid_json_object_once():
@@ -191,6 +258,26 @@ def test_aggregate_votes_top_items():
     assert result["next_step"] == "interviews"
 
 
+def test_aggregate_roadmap_removes_duplicate_week_prefixes():
+    state = MeetingState(idea="test")
+    state.transcript.add(
+        MeetingTurn(
+            agent="a",
+            role="product_manager",
+            phase="mvp_vote",
+            status="fallback",
+            payload={
+                "summary": "go",
+                "roadmap_items": ["Неделя 1: уточнить MVP", "Неделя 1: повтор", "Неделя 2: прототип"],
+            },
+        )
+    )
+
+    result = CouncilOrchestrator(llm_client=FakeClient([]), agents=[]).aggregate_votes(state)
+
+    assert result["roadmap_items"] == ["Неделя 1: уточнить MVP", "Неделя 2: прототип"]
+
+
 def test_private_context_is_not_mixed_between_agents(tmp_path: Path):
     pm_context = tmp_path / "pm.md"
     tech_context = tmp_path / "tech.md"
@@ -259,6 +346,30 @@ def test_markdown_outputs_include_transcript_and_final_plan():
     assert "## Риски" in plan
     assert "## Вопросы к заказчику" in plan
     assert "## Инсайты" in plan
+
+
+def test_markdown_outputs_do_not_include_reasoning_or_placeholders():
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+    state.transcript.add(
+        MeetingTurn(
+            agent="Tech Lead",
+            role="tech_lead",
+            phase="analysis",
+            status="fallback",
+            fallback_reason="deterministic",
+            payload={
+                "summary": "Нужно выбрать простую реализацию для сайта продажи шрифтов.",
+                "risks": ["Размытый scope"],
+                "insights": ["Проверить покупку лицензии."],
+            },
+        )
+    )
+    orchestrator = CouncilOrchestrator(llm_client=FakeClient([]), agents=[])
+
+    markdown = orchestrator.build_final_plan_markdown(state)
+
+    banned = ["Thinking Process", "Analyze the Request", "Return only JSON", "Schema", "..."]
+    assert not any(item in markdown for item in banned)
 
 
 def test_default_prompts_do_not_force_b2b_saas():

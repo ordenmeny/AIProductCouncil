@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from ai_product_council.agents import get_default_agents
 from ai_product_council.config import Settings, load_settings
-from ai_product_council.json_utils import extract_json_object
+from ai_product_council.json_utils import clean_llm_text, extract_json_object, extract_question_from_text
 from ai_product_council.llm_client import LLMClientError, LMStudioClient
 from ai_product_council.models import (
     AgentPayload,
@@ -112,6 +112,9 @@ class CouncilOrchestrator:
         return self.run_discussion(state)
 
     def ask_clarifying_question(self, agent: AgentRole, state: MeetingState) -> ClarifyingQuestion:
+        if self._prefers_text_fallback():
+            return self._ask_text_question(agent, state)
+
         messages = self._build_question_messages(agent, state)
         raw, status, error = self._chat_with_repair(
             messages,
@@ -120,10 +123,10 @@ class CouncilOrchestrator:
             allow_repair=self.settings.enable_repair,
         )
         if status == "failed":
-            return self._fallback_question(agent, raw, error)
+            return self._fallback_question(agent, state, raw, error)
         payload = self._parse_payload(raw, agent.name, "clarifying_questions")
         if not payload.question.strip():
-            return self._fallback_question(agent, raw, "LLM returned an empty question")
+            return self._fallback_question(agent, state, raw, "LLM returned an empty question")
         return ClarifyingQuestion(
             agent=agent.name,
             role=agent.slug,
@@ -159,7 +162,7 @@ class CouncilOrchestrator:
     def build_messages(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> list[dict[str, str]]:
         private_context = self._read_private_context(agent.private_context_path)
         system = (
-            "Return only JSON. No markdown. No reasoning. "
+            "Return one valid JSON object only. No markdown. No reasoning. "
             "Do not use quotation marks inside JSON string values. "
             "Never write ellipsis, placeholder text, TBD, or empty-looking content. "
             "If a list has no useful items, return an empty array. "
@@ -235,7 +238,7 @@ class CouncilOrchestrator:
             "top_risks": [item for item, _ in risks.most_common(3)],
             "open_questions": open_questions[:5],
             "insights": insights[:5],
-            "roadmap_items": roadmap_items[:6],
+            "roadmap_items": self._normalize_roadmap(roadmap_items),
             "next_step": next_steps[0] if next_steps else "Уточнить главный сценарий, критерии успеха и scope MVP.",
         }
 
@@ -245,6 +248,7 @@ class CouncilOrchestrator:
         return {
             "llm": statuses.get("llm", 0),
             "repaired": statuses.get("repaired", 0),
+            "text": statuses.get("text", 0),
             "failed": statuses.get("failed", 0),
             "fallback": statuses.get("fallback", 0),
         }
@@ -306,6 +310,7 @@ class CouncilOrchestrator:
                 "",
                 f"- LLM: {stats['llm']}",
                 f"- Repaired: {stats['repaired']}",
+                f"- Text: {stats['text']}",
                 f"- Failed: {stats['failed']}",
                 f"- Fallback: {stats['fallback']}",
                 "",
@@ -470,15 +475,40 @@ class CouncilOrchestrator:
         except (ValueError, ValidationError, TypeError) as exc:
             raise ValueError(f"Invalid payload from {agent_name} in {phase}: {exc}") from exc
 
-    def _fallback_question(self, agent: AgentRole, raw: str, error: str | None) -> ClarifyingQuestion:
-        raw_question = self._raw_text_to_question(raw)
+    def _ask_text_question(self, agent: AgentRole, state: MeetingState) -> ClarifyingQuestion:
+        messages = self._build_text_question_messages(agent, state)
+        try:
+            raw = self.llm_client.chat(messages, max_tokens=self.settings.question_max_tokens)
+        except LLMClientError as exc:
+            return self._fallback_question(agent, state, "", str(exc))
+        question = extract_question_from_text(raw)
+        if question:
+            return ClarifyingQuestion(
+                agent=agent.name,
+                role=agent.slug,
+                question=question,
+                status="text",
+                fallback_reason="text",
+                raw_text=raw,
+            )
+        return self._fallback_question(agent, state, raw, "LLM returned reasoning or unusable text")
+
+    def _fallback_question(
+        self,
+        agent: AgentRole,
+        state: MeetingState,
+        raw: str,
+        error: str | None,
+    ) -> ClarifyingQuestion:
+        raw_question = extract_question_from_text(raw)
+        domain = self._domain_terms(state.idea, state)
         questions = {
-            "product_manager": "Какой один пользовательский сценарий должен обязательно заработать в первой версии?",
-            "business_value": "По какому измеримому признаку заказчик поймёт, что решение действительно полезно?",
-            "tech_lead": "Какие данные, интеграции и ограничения по срокам критичны для первой версии?",
-            "ux_researcher": "Кто будет первым пользователем и какое действие должно стать для него проще?",
-            "security": "Какие данные будут загружаться в систему и кому можно будет их видеть?",
-            "skeptic": "Что будет главным признаком, что идею нужно сузить или остановить?",
+            "product_manager": f"Какой один сценарий в первой версии должен быть доведён до результата: {domain['workflow']}?",
+            "business_value": f"По какому признаку будет понятно, что {domain['product']} действительно полезен заказчику?",
+            "tech_lead": f"Какие данные и внешние сервисы нужны для MVP, чтобы реализовать {domain['workflow']} за 4-6 недель?",
+            "ux_researcher": f"Кто первый пользователь и какое действие в сценарии {domain['workflow']} должно стать проще?",
+            "security": f"Какие пользовательские данные, платежи или файлы будут обрабатываться в {domain['product']}?",
+            "skeptic": f"Какой самый рискованный допуск может сорвать запуск {domain['product']}?",
         }
         return ClarifyingQuestion(
             agent=agent.name,
@@ -486,6 +516,7 @@ class CouncilOrchestrator:
             question=raw_question
             or questions.get(agent.slug, "Какое главное ограничение нужно учесть перед выбором MVP?"),
             status="fallback",
+            fallback_reason="text" if raw_question else "deterministic",
             error=error,
             raw_text=raw,
         )
@@ -498,22 +529,23 @@ class CouncilOrchestrator:
         raw: str,
         error: str | None,
     ) -> MeetingTurn:
-        raw_summary = self._raw_text_to_summary(raw)
+        raw_summary = clean_llm_text(raw)
+        domain = self._domain_terms(state.idea, state)
         role_focus = {
-            "product_manager": "сфокусировать MVP на одном основном сценарии",
-            "business_value": "проверить измеримую пользу и готовность внедрять решение",
-            "tech_lead": "выбрать простую реализацию без лишних интеграций",
-            "ux_researcher": "проверить понятность первого пользовательского пути",
-            "security": "минимизировать данные и явно описать доступы",
-            "skeptic": "сузить scope и проверить самый рискованный допуск",
+            "product_manager": f"сфокусировать MVP на сценарии {domain['workflow']}",
+            "business_value": f"проверить, что {domain['product']} даёт измеримую пользу",
+            "tech_lead": f"выбрать простую реализацию для {domain['product']}: {domain['workflow']} без лишних интеграций",
+            "ux_researcher": f"проверить понятность выбора и получения результата в {domain['product']}",
+            "security": f"минимизировать данные, платежные риски и доступы в {domain['product']}",
+            "skeptic": f"сузить scope {domain['product']} до проверяемого запуска",
         }.get(agent.slug, "сфокусировать первую версию")
         payloads = {
             "analysis": AgentPayload(
                 summary=raw_summary or f"Нужно {role_focus}.",
-                arguments=[f"Для задачи {state.idea[:80]} первая версия должна быть проверяемой и небольшой."],
+                arguments=[f"Для задачи {domain['product']} первая версия должна быть проверяемой и небольшой."],
                 risks=["Слишком широкий scope может сорвать MVP за 4-6 недель."],
-                open_questions=["Какой результат пользователь должен получить в первом успешном сценарии?"],
-                insights=["Главная ценность MVP может быть не в количестве функций, а в снятии одного узкого места процесса."],
+                open_questions=[f"Какой результат пользователь должен получить после сценария {domain['workflow']}?"],
+                insights=[f"Главная ценность MVP — довести сценарий {domain['workflow']} до понятного результата, а не собрать полный продукт."],
             ),
             "debate": AgentPayload(
                 summary=raw_summary or f"Поддерживаю необходимость сузить решение: нужно {role_focus}.",
@@ -522,37 +554,39 @@ class CouncilOrchestrator:
                 insights=["Спор агентов полезен, если приводит к ограничению первой версии."],
             ),
             "mvp_proposal": AgentPayload(
-                summary=raw_summary or "Первая версия должна закрывать один основной workflow.",
-                mvp_features=["Ввод исходных данных", "Обработка основного сценария", "Экспорт или сохранение результата"],
-                out_of_scope=["Сложные интеграции", "Расширенная аналитика", "Несколько разных сценариев сразу"],
-                risks=["Нечёткие правила процесса могут усложнить реализацию."],
+                summary=raw_summary or f"Первая версия должна закрывать сценарий {domain['workflow']}.",
+                mvp_features=domain["mvp_features"],
+                out_of_scope=domain["out_of_scope"],
+                risks=domain["risks"],
                 roadmap_items=[
-                    "Неделя 1: уточнить сценарий и критерии успеха",
+                    f"Неделя 1: уточнить сценарий {domain['workflow']} и критерии успеха",
                     "Неделя 2-3: собрать прототип и основную логику",
                     "Неделя 4: провести пилот и собрать обратную связь",
                 ],
-                open_questions=["Какие поля и правила обязательны для первого результата?"],
+                open_questions=domain["open_questions"],
             ),
             "mvp_vote": AgentPayload(
                 summary=raw_summary or "Запускать после уточнения scope и критериев успеха.",
                 decision="go_after_clarification",
-                mvp_features=["Основной пользовательский сценарий", "Минимальное хранение данных", "Экспорт результата"],
-                risks=["Размытый scope", "Неясный владелец процесса"],
+                mvp_features=domain["mvp_features"][:3],
+                risks=domain["risks"],
                 roadmap_items=[
                     "Неделя 1: зафиксировать MVP",
                     "Неделя 2-3: реализовать первую версию",
                     "Неделя 4-6: пилот и доработка",
                 ],
-                open_questions=["Кто принимает итоговое решение по результату пилота?"],
-                insights=["Лучший следующий шаг — не расширять идею, а проверить один полезный сценарий."],
+                open_questions=domain["open_questions"],
+                insights=[f"Лучший следующий шаг — не расширять идею, а проверить сценарий {domain['workflow']}."],
                 next_step="Провести короткое уточнение требований и зафиксировать MVP на один сценарий.",
             ),
         }
+        fallback_reason = "text" if raw_summary else "deterministic"
         return MeetingTurn(
             agent=agent.name,
             role=agent.slug,
             phase=phase,
             status="fallback",
+            fallback_reason=fallback_reason,
             payload=payloads[phase],
             raw_text=raw,
             error=error,
@@ -560,37 +594,78 @@ class CouncilOrchestrator:
 
     @staticmethod
     def _raw_text_to_question(raw: str) -> str:
-        cleaned = CouncilOrchestrator._clean_raw_text(raw)
-        if not cleaned or "{" in cleaned[:20]:
-            return ""
-        sentences = [part.strip() for part in cleaned.replace("\n", " ").split("?") if part.strip()]
-        if not sentences:
-            return ""
-        first = sentences[0]
-        if len(first) < 12:
-            return ""
-        return first[:240].rstrip(".:,;") + "?"
+        return extract_question_from_text(raw)
 
     @staticmethod
     def _raw_text_to_summary(raw: str) -> str:
-        cleaned = CouncilOrchestrator._clean_raw_text(raw)
-        if not cleaned or len(cleaned) < 20:
-            return ""
-        if cleaned.startswith("{") and cleaned.endswith("}"):
-            return ""
-        return cleaned[:700].rstrip()
+        return clean_llm_text(raw)
 
     @staticmethod
     def _clean_raw_text(raw: str) -> str:
-        cleaned = raw.strip()
-        if not cleaned:
-            return ""
-        for marker in ("```json", "```", "<think>", "</think>"):
-            cleaned = cleaned.replace(marker, " ")
-        cleaned = " ".join(cleaned.split())
-        if cleaned in {"...", "…", "not json", "still not json"}:
-            return ""
-        return cleaned
+        return clean_llm_text(raw)
+
+    def _build_text_question_messages(self, agent: AgentRole, state: MeetingState) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "Ты участник рабочего IT-созвона. Верни только один короткий вопрос по-русски. "
+                    "Без JSON, markdown, списков, reasoning и объяснений."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Роль: {agent.name}. Идея: {state.idea[:400]}. "
+                    f"Ограничения: {(state.constraints or 'не указаны')[:160]}. "
+                    "Задай один вопрос заказчику, который поможет определить MVP."
+                ),
+            },
+        ]
+
+    def _prefers_text_fallback(self) -> bool:
+        model = self.settings.model.lower()
+        return "qwen" in model or "deepseek" in model or "r1" in model
+
+    @staticmethod
+    def _domain_terms(idea: str, state: MeetingState | None) -> dict:
+        text = " ".join(
+            part for part in [idea, state.constraints if state else "", state.desired_result if state else ""] if part
+        ).lower()
+        if any(word in text for word in ["шрифт", "font", "лиценз", "eula"]):
+            return {
+                "product": "сайт продажи шрифтов",
+                "workflow": "выбор шрифта, проверка начертания, покупка лицензии и получение файла",
+                "mvp_features": [
+                    "Каталог шрифтов с фильтрами",
+                    "Карточка шрифта с live preview",
+                    "Корзина и покупка лицензии",
+                    "Автоматическая выдача файла и EULA после оплаты",
+                ],
+                "out_of_scope": [
+                    "Подписка на библиотеку шрифтов",
+                    "Личный кабинет с расширенной историей",
+                    "Маркетплейс сторонних студий",
+                ],
+                "risks": [
+                    "Неясные условия лицензии могут тормозить покупку.",
+                    "Платежи и выдача файлов требуют аккуратной проверки.",
+                    "Слишком большой каталог усложнит запуск MVP.",
+                ],
+                "open_questions": [
+                    "Какие типы лицензий нужны в первой версии?",
+                    "Какие способы оплаты обязательны для первых покупателей?",
+                    "Какие 10 шрифтов попадут в стартовый каталог?",
+                ],
+            }
+        return {
+            "product": idea.strip()[:120] or "сервис",
+            "workflow": "один основной пользовательский сценарий",
+            "mvp_features": ["Ввод исходных данных", "Обработка основного сценария", "Экспорт или сохранение результата"],
+            "out_of_scope": ["Сложные интеграции", "Расширенная аналитика", "Несколько разных сценариев сразу"],
+            "risks": ["Размытый scope", "Неясный владелец процесса"],
+            "open_questions": ["Кто принимает итоговое решение по результату пилота?"],
+        }
 
     @staticmethod
     def _payload_is_empty(payload: AgentPayload) -> bool:
@@ -731,4 +806,23 @@ class CouncilOrchestrator:
             if normalized and normalized not in seen:
                 result.append(normalized)
                 seen.add(normalized)
+        return result
+
+    @staticmethod
+    def _normalize_roadmap(values: list[str]) -> list[str]:
+        if not values:
+            return []
+        result: list[str] = []
+        seen_prefixes: set[str] = set()
+        for value in values:
+            normalized = value.strip()
+            if not normalized:
+                continue
+            prefix = normalized.split(":", 1)[0].lower()
+            if prefix in seen_prefixes:
+                continue
+            result.append(normalized)
+            seen_prefixes.add(prefix)
+            if len(result) >= 5:
+                break
         return result

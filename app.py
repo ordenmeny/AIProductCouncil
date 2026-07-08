@@ -60,16 +60,60 @@ def ensure_model_ready(orchestrator: CouncilOrchestrator, use_demo_without_llm: 
     return True
 
 
+def run_model_diagnostics(orchestrator: CouncilOrchestrator) -> None:
+    if isinstance(orchestrator.llm_client, DemoFailedClient):
+        st.info("Включён режим `Демо без LLM`: реальная модель не проверяется.")
+        return
+    try:
+        models = orchestrator.llm_client.list_models()
+    except LLMClientError as exc:
+        st.error(f"LM Studio недоступен: {exc}")
+        return
+
+    if orchestrator.settings.model not in models:
+        st.error(
+            f"Модель `{orchestrator.settings.model}` не загружена. "
+            f"Доступны: {', '.join(models) or 'нет моделей'}."
+        )
+        return
+
+    try:
+        answer = orchestrator.llm_client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": "Ответь только одной короткой русской фразой. Без reasoning.",
+                },
+                {"role": "user", "content": "Напиши: модель готова"},
+            ],
+            max_tokens=80,
+            timeout_seconds=20,
+        )
+    except LLMClientError as exc:
+        st.error(f"Модель загружена, но тестовый запрос не прошёл: {exc}")
+        return
+
+    answer_lower = answer.lower()
+    if any(marker in answer_lower for marker in ["thinking process", "analyze the request", "<think>", "schema"]):
+        st.warning(
+            "Модель отвечает reasoning-текстом. Проект сможет включить текстовый/fallback режим, "
+            "но для чистой демонстрации лучше выбрать модель без reasoning."
+        )
+    else:
+        st.success("Модель доступна и отвечает без явного reasoning.")
+    st.caption(answer[:300] or "Пустой ответ модели.")
+
+
 def warn_if_fallback_dominates(state: MeetingState, context: str) -> None:
     orchestrator = make_orchestrator(demo_without_llm)
     stats = orchestrator.response_stats(state)
-    useful = stats["llm"] + stats["repaired"]
+    useful = stats["llm"] + stats["repaired"] + stats["text"]
     fallback = stats["fallback"]
     if fallback and useful == 0:
         st.warning(
             f"{context}: все ответы получены через fallback. "
-            "Это аварийный режим: LM Studio доступен, но модель не вернула валидный JSON. "
-            "Для нормальной демонстрации проверьте модель, identifier и попробуйте Qwen/Gemma вместо reasoning-модели."
+            "Это аварийный режим: LM Studio доступен, но модель не дала пригодный структурированный или текстовый ответ. "
+            "Проверьте модель, identifier и попробуйте модель без reasoning."
         )
     elif fallback > useful:
         st.warning(
@@ -96,6 +140,8 @@ with st.sidebar:
         value=False,
         help="Только для аварийной демонстрации UI. Настоящий созвон требует выключенного режима и запущенного LM Studio.",
     )
+    if st.button("Проверить модель"):
+        run_model_diagnostics(make_orchestrator(demo_without_llm))
 
     st.header("Агенты")
     for agent in get_default_agents():
@@ -203,9 +249,10 @@ if state and state.transcript.turns:
     orchestrator = make_orchestrator(demo_without_llm)
     stats = orchestrator.response_stats(state)
 
-    col_llm, col_repaired, col_failed, col_fallback = st.columns(4)
+    col_llm, col_repaired, col_text, col_failed, col_fallback = st.columns(5)
     col_llm.metric("LLM", stats["llm"])
     col_repaired.metric("Repaired", stats["repaired"])
+    col_text.metric("Text", stats["text"])
     col_failed.metric("Failed", stats["failed"])
     col_fallback.metric("Fallback", stats["fallback"])
     warn_if_fallback_dominates(state, "Текущий результат")

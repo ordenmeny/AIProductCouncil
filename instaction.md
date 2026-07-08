@@ -88,6 +88,13 @@ lms ps
 ```
 
 Важно: значение `LM_STUDIO_MODEL` в `.env` должно совпадать с identifier из `lms ps`.
+Если `lms ps` показывает `qwen/qwen3.5-9b`, в `.env` должно быть ровно:
+
+```env
+LM_STUDIO_MODEL=qwen/qwen3.5-9b
+```
+
+Если identifier другой, скопируйте его без изменений.
 
 ## Запуск проекта
 

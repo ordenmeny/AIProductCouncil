@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from ai_product_council.json_utils import clean_llm_text
+
 
 ProjectMode = Literal["new_service", "feature_in_existing_product"]
 
@@ -25,7 +27,8 @@ Decision = Literal[
     "unknown",
 ]
 
-ResponseStatus = Literal["llm", "repaired", "failed", "fallback"]
+ResponseStatus = Literal["llm", "repaired", "text", "failed", "fallback"]
+FallbackReason = Literal["", "json", "text", "deterministic", "model_unavailable"]
 
 
 class AgentRole(BaseModel):
@@ -56,7 +59,11 @@ class AgentPayload(BaseModel):
         if not isinstance(value, str):
             return value
         normalized = value.strip()
-        return "" if normalized in {"...", "…", "-", "—"} else normalized
+        if normalized in {"...", "…", "-", "—"}:
+            return ""
+        if _contains_reasoning_marker(normalized):
+            return clean_llm_text(normalized)
+        return normalized
 
     @field_validator(
         "arguments",
@@ -77,9 +84,19 @@ class AgentPayload(BaseModel):
             if not isinstance(item, str):
                 continue
             normalized = item.strip()
+            if _contains_reasoning_marker(normalized):
+                normalized = clean_llm_text(normalized)
             if normalized and normalized not in {"...", "…", "-", "—"}:
                 result.append(normalized)
         return result
+
+
+def _contains_reasoning_marker(value: str) -> bool:
+    lowered = value.lower()
+    return any(
+        marker in lowered
+        for marker in ("thinking process", "analyze the request", "return only json", "schema keys", "<think>")
+    )
 
 
 class ClarifyingQuestion(BaseModel):
@@ -87,6 +104,7 @@ class ClarifyingQuestion(BaseModel):
     role: str
     question: str
     status: ResponseStatus = "llm"
+    fallback_reason: FallbackReason = ""
     error: str | None = None
     raw_text: str = ""
 
@@ -101,6 +119,7 @@ class MeetingTurn(BaseModel):
     role: str
     phase: PhaseName
     status: ResponseStatus
+    fallback_reason: FallbackReason = ""
     payload: AgentPayload = Field(default_factory=AgentPayload)
     raw_text: str = ""
     error: str | None = None
