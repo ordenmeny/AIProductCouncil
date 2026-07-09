@@ -71,6 +71,20 @@ async def llm_health(settings: Settings = Depends(get_settings)) -> dict[str, ob
         ) from exc
 
 
+@app.get("/api/llm/models")
+async def llm_models(settings: Settings = Depends(get_settings)) -> dict[str, object]:
+    try:
+        return {
+            "configured_model": settings.openai_model,
+            "available_models": await LLMClient(settings).list_models(),
+        }
+    except Exception as exc:  # noqa: BLE001 - endpoint is diagnostic by design.
+        raise HTTPException(
+            status_code=502,
+            detail=f"LM Studio models request failed: {exc}",
+        ) from exc
+
+
 @app.get("/api/agents")
 def agents():
     return {"agents": list_public_roles()}

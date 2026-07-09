@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError
 
 from backend.app.core.config import Settings
 
@@ -29,28 +30,43 @@ class LLMClient:
         }
         if self._settings.llm_use_response_format:
             payload["response_format"] = {"type": "json_object"}
-        response = await self._client.chat.completions.create(**payload)
+        try:
+            response = await self._client.chat.completions.create(**payload)
+        except APIStatusError as exc:
+            raise RuntimeError(_format_openai_status_error(exc)) from exc
+        except APIConnectionError as exc:
+            raise RuntimeError(f"Cannot connect to LM Studio at {self._settings.openai_base_url}: {exc}") from exc
         content = response.choices[0].message.content
         if not content:
             raise ValueError("LLM returned an empty response")
         return content
 
     async def healthcheck(self) -> dict[str, Any]:
+        models = await self.list_models()
         response = await self._client.chat.completions.create(
             model=self._settings.openai_model,
             messages=[
-                {"role": "system", "content": "Return only the word ok."},
-                {"role": "user", "content": "healthcheck"},
+                {"role": "user", "content": "Return only this JSON: {\"status\":\"ok\"}"},
             ],
             temperature=0,
-            max_tokens=8,
+            max_tokens=20,
         )
         return {
             "status": "ok",
-            "model": self._settings.openai_model,
+            "configured_model": self._settings.openai_model,
+            "available_models": models,
             "base_url": self._settings.openai_base_url,
             "content": response.choices[0].message.content,
         }
+
+    async def list_models(self) -> list[str]:
+        try:
+            response = await self._client.models.list()
+        except APIStatusError as exc:
+            raise RuntimeError(_format_openai_status_error(exc)) from exc
+        except APIConnectionError as exc:
+            raise RuntimeError(f"Cannot connect to LM Studio at {self._settings.openai_base_url}: {exc}") from exc
+        return [model.id for model in response.data]
 
     async def repair_json(self, invalid_payload: str, validation_error: str) -> str:
         system_prompt = (
@@ -67,6 +83,7 @@ class LLMClient:
         )
         return await self.complete_json(system_prompt, user_prompt)
 
-
-def json_schema_hint(schema: dict[str, Any]) -> str:
-    return json.dumps(schema, ensure_ascii=False, indent=2)
+def _format_openai_status_error(exc: APIStatusError) -> str:
+    body = exc.response.text if exc.response is not None else ""
+    body = body[:1000] if body else ""
+    return f"LM Studio returned HTTP {exc.status_code}. Body: {body or exc.message}"

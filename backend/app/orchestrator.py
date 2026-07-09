@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from backend.app.agents.roles import AGENTS, PHASE_INSTRUCTIONS, AgentDefinition
 from backend.app.core.config import Settings
 from backend.app.exporters import build_documents, build_vote_summary
-from backend.app.llm.client import LLMClient, json_schema_hint
+from backend.app.llm.client import LLMClient
 from backend.app.models import (
     AgentMessage,
     AgentPhase,
@@ -116,7 +116,6 @@ class MeetingOrchestrator:
 
 
 def _system_prompt(agent: AgentDefinition, phase: AgentPhase) -> str:
-    schema = AgentStructuredResponse.model_json_schema()
     return f"""
 Ты агент в симуляции рабочего созвона IT-команды.
 Твоя роль: {agent.role.name}.
@@ -126,13 +125,30 @@ def _system_prompt(agent: AgentDefinition, phase: AgentPhase) -> str:
 
 Инструкция текущей фазы: {PHASE_INSTRUCTIONS[phase]}
 
-Верни только JSON object без Markdown. JSON должен соответствовать схеме:
-{json_schema_hint(schema)}
+Верни только JSON object без Markdown.
+Используй только эти поля:
+{{
+  "agent": "{agent.role.name}",
+  "agent_id": "{agent.role.id}",
+  "phase": "{phase}",
+  "summary": "краткий вывод агента",
+  "mvp_priority": ["1-5 конкретных пунктов MVP"],
+  "roadmap_items": ["пункты roadmap, если уместно"],
+  "open_questions": ["важные вопросы заказчику"],
+  "insights": ["полезные инсайты"],
+  "risks": ["риски"],
+  "main_risk": "главный риск",
+  "decision": null,
+  "next_step": "следующий шаг",
+  "reason": "обоснование"
+}}
 
 Обязательные правила:
 - agent должен быть "{agent.role.name}".
 - agent_id должен быть "{agent.role.id}".
 - phase должен быть "{phase}".
+- В фазе vote decision должен быть одним из: "go", "go_after_clarification", "no_go", "pivot_or_narrow_mvp".
+- В остальных фазах decision должен быть null.
 - Пиши на русском.
 - Будь конкретным: функции, риски, шаги, решения, критерии.
 - Не раскрывай приватный контекст как отдельный блок; используй его в рассуждении.

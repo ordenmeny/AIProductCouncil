@@ -46,6 +46,7 @@ npm run dev
 
 - Если Vite пишет `http proxy error: /api/meetings ECONNREFUSED 127.0.0.1:8000`, backend не запущен или запущен на другом порту.
 - Проверить backend: `curl http://127.0.0.1:8000/api/health`.
+- Посмотреть id моделей, которые реально видит backend: `curl http://127.0.0.1:8000/api/llm/models`.
 - Проверить связку backend → LM Studio: `curl http://127.0.0.1:8000/api/llm/health`.
 - Если LM Studio возвращает `502`, проверьте, что local server включен, модель загружена, `OPENAI_MODEL` совпадает с id модели в LM Studio, а `OPENAI_BASE_URL` равен `http://localhost:1234/v1`.
 - По умолчанию `LLM_USE_RESPONSE_FORMAT=false`, потому что не все модели и версии LM Studio стабильно поддерживают принудительный JSON response format. Оркестратор все равно просит JSON в промпте, извлекает JSON из ответа и валидирует его через Pydantic.
