@@ -51,8 +51,24 @@ def load_meeting_or_404(storage: MeetingStorage, meeting_id: str) -> MeetingStat
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
+    return {
+        "status": "ok",
+        "model": settings.openai_model,
+        "base_url": settings.openai_base_url,
+        "response_format_json": settings.llm_use_response_format,
+    }
+
+
+@app.get("/api/llm/health")
+async def llm_health(settings: Settings = Depends(get_settings)) -> dict[str, object]:
+    try:
+        return await LLMClient(settings).healthcheck()
+    except Exception as exc:  # noqa: BLE001 - endpoint is diagnostic by design.
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM Studio healthcheck failed: {exc}",
+        ) from exc
 
 
 @app.get("/api/agents")

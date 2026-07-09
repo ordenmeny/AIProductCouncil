@@ -18,20 +18,39 @@ class LLMClient:
         )
 
     async def complete_json(self, system_prompt: str, user_prompt: str) -> str:
-        response = await self._client.chat.completions.create(
-            model=self._settings.openai_model,
-            messages=[
+        payload: dict[str, Any] = {
+            "model": self._settings.openai_model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=self._settings.llm_temperature,
-            max_tokens=self._settings.llm_max_tokens,
-            response_format={"type": "json_object"},
-        )
+            "temperature": self._settings.llm_temperature,
+            "max_tokens": self._settings.llm_max_tokens,
+        }
+        if self._settings.llm_use_response_format:
+            payload["response_format"] = {"type": "json_object"}
+        response = await self._client.chat.completions.create(**payload)
         content = response.choices[0].message.content
         if not content:
             raise ValueError("LLM returned an empty response")
         return content
+
+    async def healthcheck(self) -> dict[str, Any]:
+        response = await self._client.chat.completions.create(
+            model=self._settings.openai_model,
+            messages=[
+                {"role": "system", "content": "Return only the word ok."},
+                {"role": "user", "content": "healthcheck"},
+            ],
+            temperature=0,
+            max_tokens=8,
+        )
+        return {
+            "status": "ok",
+            "model": self._settings.openai_model,
+            "base_url": self._settings.openai_base_url,
+            "content": response.choices[0].message.content,
+        }
 
     async def repair_json(self, invalid_payload: str, validation_error: str) -> str:
         system_prompt = (

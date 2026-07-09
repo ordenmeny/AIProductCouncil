@@ -176,6 +176,7 @@ def _repair_prompt(raw: str, error: str) -> str:
 
 
 def _parse_agent_response(raw: str, agent: AgentDefinition, phase: AgentPhase) -> AgentStructuredResponse:
+    raw = _extract_json_object(raw)
     try:
         payload: dict[str, Any] = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -197,11 +198,28 @@ def _parse_agent_response(raw: str, agent: AgentDefinition, phase: AgentPhase) -
 
 
 def _fallback_response(agent: AgentDefinition, phase: AgentPhase, error: str) -> AgentStructuredResponse:
+    role_questions = {
+        "product_manager": (
+            "Для какого сегмента пользователей первая версия должна дать измеримую пользу, и какой результат будет считаться успехом?"
+        ),
+        "tech_lead": (
+            "Какие внешние системы, данные или ограничения инфраструктуры обязательно нужно учесть в первой версии?"
+        ),
+        "ux_researcher": (
+            "Какой один основной сценарий пользователь должен пройти в MVP от начала до результата?"
+        ),
+        "security_data_expert": (
+            "Какие типы данных будет обрабатывать сервис и кто должен иметь к ним доступ?"
+        ),
+        "skeptic_risk_officer": (
+            "Что может сделать проект бесполезным для заказчика даже при технически успешной реализации?"
+        ),
+    }
     defaults = {
         AgentPhase.CLARIFYING_QUESTION: {
             "summary": "Модель не вернула валидный вопрос, зафиксирован технический fallback.",
-            "open_questions": ["Какой результат будет считаться успешным для первой версии?"],
-            "reason": "Без критерия успеха невозможно уверенно сузить MVP.",
+            "open_questions": [role_questions.get(agent.role.id, "Что критично уточнить перед проектированием MVP?")],
+            "reason": "Вопрос выбран из профессионального fallback-профиля агента из-за ошибки ответа модели.",
         },
         AgentPhase.INDIVIDUAL_ANALYSIS: {
             "summary": "Нужно сузить первую версию до одного проверяемого пользовательского сценария.",
@@ -257,3 +275,18 @@ def _first_non_empty(items: list[str], fallback: str, default: str) -> str:
     if fallback.strip():
         return fallback.strip()
     return default
+
+
+def _extract_json_object(raw: str) -> str:
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.removeprefix("```json").removeprefix("```").strip()
+        if stripped.endswith("```"):
+            stripped = stripped[:-3].strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        return stripped[start : end + 1]
+    return stripped

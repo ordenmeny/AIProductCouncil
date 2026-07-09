@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=1200, alias="LLM_MAX_TOKENS")
     llm_json_retries: int = Field(default=2, alias="LLM_JSON_RETRIES")
     llm_timeout_seconds: float = Field(default=120.0, alias="LLM_TIMEOUT_SECONDS")
+    llm_use_response_format: bool = Field(default=False, alias="LLM_USE_RESPONSE_FORMAT")
     meeting_storage_dir: str = Field(default="./data/meetings", alias="MEETING_STORAGE_DIR")
     cors_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
