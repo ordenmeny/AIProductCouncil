@@ -1,6 +1,5 @@
-.env
-!.env.qwen-example
-!.env.gemma
+.env*
+!.env*example
 .venv/
 __pycache__/
 *.py[cod]

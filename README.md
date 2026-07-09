@@ -16,13 +16,13 @@
 2. Скопировать настройки:
 
 ```bash
-cp .env.qwen-example .env.qwen
+cp .env.qwen-example .env
 ```
 
 Для проверки Gemma можно использовать:
 
 ```bash
-cp .env.gemma .env
+cp .env.gemma-example .env
 ```
 
 3. Установить backend-зависимости и запустить API:
