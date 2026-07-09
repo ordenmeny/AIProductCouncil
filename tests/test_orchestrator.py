@@ -95,13 +95,13 @@ def test_invalid_json_question_keeps_useful_raw_text():
     assert question.question == "Кто будет покупать шрифт и как он поймёт условия лицензии?"
 
 
-def test_qwen_question_uses_text_mode_for_clean_question():
+def test_deepseek_question_uses_text_mode_for_clean_question():
     client = FakeClient(["Кто будет первым покупателем шрифта и какая лицензия ему нужна?"])
     agent = make_agent()
     settings = Settings(
         base_url="http://localhost:1234/v1",
         api_key="lm-studio",
-        model="qwen/qwen3.5-9b",
+        model="deepseek-r1-distill-qwen-7b-q4-k-m",
     )
     orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=[agent])
     state = MeetingState(idea="Сайт для продажи шрифтов")
@@ -119,7 +119,7 @@ def test_reasoning_question_uses_domain_fallback_instead_of_raw_reasoning():
     settings = Settings(
         base_url="http://localhost:1234/v1",
         api_key="lm-studio",
-        model="qwen/qwen3.5-9b",
+        model="deepseek-r1-distill-qwen-7b-q4-k-m",
     )
     orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=[agent])
     state = MeetingState(idea="Сайт для продажи шрифтов")
@@ -144,6 +144,65 @@ def test_failed_turn_uses_fallback_payload():
     assert turn.payload.summary
     assert turn.payload.mvp_features
     assert turn.payload.decision == "go_after_clarification"
+
+
+def test_collect_questions_deduplicates_similar_questions_by_role():
+    agents = [
+        make_agent("Product Manager", "product_manager"),
+        make_agent("Tech Lead", "tech_lead"),
+    ]
+    client = FakeClient(
+        [
+            "Какие функции доставки и оплаты критически важны для запуска MVP?",
+            "Какие именно функции доставки и оплаты являются критически важными для запуска MVP?",
+        ]
+    )
+    settings = Settings(
+        base_url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        model="deepseek-r1-distill-qwen-7b-q4-k-m",
+    )
+    orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=agents)
+    state = MeetingState(idea="Сервис доставки ульев за 15 минут в полночь")
+
+    questions = orchestrator.collect_questions(state)
+
+    assert len(questions) == 2
+    assert questions[0].question != questions[1].question
+    assert questions[1].status == "fallback"
+    assert "данные" in questions[1].question.lower() or "api" in questions[1].question.lower()
+
+
+def test_fallback_questions_are_role_specific():
+    agents = [
+        make_agent("Product Manager", "product_manager"),
+        make_agent("Security", "security"),
+        make_agent("Skeptic", "skeptic"),
+    ]
+    orchestrator = CouncilOrchestrator(llm_client=FakeClient([]), agents=agents)
+    state = MeetingState(idea="Сервис доставки ульев за 15 минут в полночь")
+
+    questions = [orchestrator._fallback_question(agent, state, "", "failed").question for agent in agents]
+
+    assert len(set(questions)) == len(questions)
+    assert any("данные" in question.lower() or "платеж" in question.lower() for question in questions)
+    assert any("допущ" in question.lower() for question in questions)
+
+
+def test_fallback_turns_are_role_specific_in_same_phase():
+    agents = [
+        make_agent("Product Manager", "product_manager"),
+        make_agent("Tech Lead", "tech_lead"),
+        make_agent("UX Researcher", "ux_researcher"),
+    ]
+    orchestrator = CouncilOrchestrator(llm_client=FakeClient([]), agents=agents)
+    state = MeetingState(idea="Сервис доставки ульев за 15 минут в полночь")
+
+    turns = [orchestrator._fallback_turn(agent, "analysis", state, "", "failed") for agent in agents]
+
+    assert len({turn.payload.summary for turn in turns}) == len(turns)
+    assert len({tuple(turn.payload.arguments) for turn in turns}) == len(turns)
+    assert len({tuple(turn.payload.risks) for turn in turns}) == len(turns)
 
 
 def test_invalid_json_turn_keeps_useful_raw_text_as_summary():

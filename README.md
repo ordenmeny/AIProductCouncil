@@ -27,7 +27,7 @@ uv sync
 cp .env.gemma .env
 ```
 
-Для аудитории с Qwen:
+Для аудитории с DeepSeek R1 Distill Qwen:
 
 ```bash
 cp .env.qwen .env
@@ -38,11 +38,11 @@ cp .env.qwen .env
 ```env
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 LM_STUDIO_API_KEY=lm-studio
-LM_STUDIO_MODEL=google/gemma-4-e4b
-LM_STUDIO_TIMEOUT_SECONDS=45
-LM_STUDIO_MAX_TOKENS=350
-LM_STUDIO_QUESTION_MAX_TOKENS=160
-LM_STUDIO_TURN_MAX_TOKENS=260
+LM_STUDIO_MODEL=deepseek-r1-distill-qwen-7b-q4-k-m
+LM_STUDIO_TIMEOUT_SECONDS=60
+LM_STUDIO_MAX_TOKENS=420
+LM_STUDIO_QUESTION_MAX_TOKENS=180
+LM_STUDIO_TURN_MAX_TOKENS=420
 LM_STUDIO_ENABLE_REPAIR=false
 ```
 
@@ -95,15 +95,17 @@ google/gemma-4-e4b
 Модель для аудитории:
 
 ```text
-qwen/qwen3.5-9b
+deepseek-r1-distill-qwen-7b-q4-k-m
 ```
 
 Через LM Studio CLI:
 
 ```powershell
 lms server start --port 1234
-lms load qwen/qwen3.5-9b --identifier qwen3.5-9b --context-length 8192 -y
+lms load deepseek-r1-distill-qwen-7b-q4-k-m --identifier deepseek-r1-distill-qwen-7b-q4-k-m --context-length 8192 -y
 ```
+
+Если LM Studio показывает другой identifier в `lms ps`, укажите в `LM_STUDIO_MODEL` ровно это значение.
 
 Подробнее: `instaction.md`.
 
@@ -114,4 +116,6 @@ lms load qwen/qwen3.5-9b --identifier qwen3.5-9b --context-length 8192 -y
 - `LM_STUDIO_TURN_MAX_TOKENS` — лимит для реплик созвона.
 - `LM_STUDIO_ENABLE_REPAIR` — делать ли повторный запрос для исправления невалидного JSON.
 
-Для Gemma repair выключен, потому что модель часто уходит в reasoning и портит JSON. Для Qwen repair включён.
+Для Gemma и DeepSeek R1 repair выключен, потому что reasoning-модели часто тратят второй запрос на рассуждения вместо чистого JSON. Если нужен эксперимент с более строгим JSON, можно включить `LM_STUDIO_ENABLE_REPAIR=true`, но демо будет медленнее.
+
+Если в браузере появляется `NotFoundError removeChild`, отключите авто-перевод или расширение переводчика для `localhost:8501`. Переводчик меняет DOM Streamlit/React и может ломать перерисовку страницы.

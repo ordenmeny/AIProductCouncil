@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -84,7 +85,17 @@ class CouncilOrchestrator:
         )
 
     def collect_questions(self, state: MeetingState) -> list[ClarifyingQuestion]:
-        state.questions = [self.ask_clarifying_question(agent, state) for agent in self.agents]
+        state.questions = []
+        for agent in self.agents:
+            question = self.ask_clarifying_question(agent, state)
+            if self._is_duplicate_question(question.question, state.questions):
+                question = self._fallback_question(
+                    agent,
+                    state,
+                    "",
+                    "Question was too similar to an earlier agent question",
+                )
+            state.questions.append(question)
         return state.questions
 
     def set_user_answer(self, state: MeetingState, answer_text: str) -> None:
@@ -161,18 +172,23 @@ class CouncilOrchestrator:
 
     def build_messages(self, agent: AgentRole, phase: PhaseName, state: MeetingState) -> list[dict[str, str]]:
         private_context = self._read_private_context(agent.private_context_path)
-        system = (
-            "Return one valid JSON object only. No markdown. No reasoning. "
-            "Do not use quotation marks inside JSON string values. "
-            "Never write ellipsis, placeholder text, TBD, or empty-looking content. "
-            "If a list has no useful items, return an empty array. "
-            "Use short Russian values. "
-            f"{self._turn_schema(phase)}"
+        system = self._agent_system_prompt(
+            agent,
+            private_context,
+            (
+                "Return one valid JSON object only. No markdown. No reasoning. "
+                "Do not use quotation marks inside JSON string values. "
+                "Never write ellipsis, placeholder text, TBD, or empty-looking content. "
+                "If a list has no useful items, return an empty array. "
+                "Use short Russian values. "
+                f"{self._turn_schema(phase)}"
+            ),
         )
         previous = self._short_transcript_summary(state)
+        focus = self._role_focus(agent.slug)
         user = (
             f"Role: {agent.name}. "
-            f"Role hint: {private_context[:260]}. "
+            f"Role focus: {focus}. "
             f"Project: {self._project_mode_label(state.project_mode)}. "
             f"Idea: {state.idea[:500]}. "
             f"Constraints: {(state.constraints or 'none')[:180]}. "
@@ -502,19 +518,11 @@ class CouncilOrchestrator:
     ) -> ClarifyingQuestion:
         raw_question = extract_question_from_text(raw)
         domain = self._domain_terms(state.idea, state)
-        questions = {
-            "product_manager": f"Какой один сценарий в первой версии должен быть доведён до результата: {domain['workflow']}?",
-            "business_value": f"По какому признаку будет понятно, что {domain['product']} действительно полезен заказчику?",
-            "tech_lead": f"Какие данные и внешние сервисы нужны для MVP, чтобы реализовать {domain['workflow']} за 4-6 недель?",
-            "ux_researcher": f"Кто первый пользователь и какое действие в сценарии {domain['workflow']} должно стать проще?",
-            "security": f"Какие пользовательские данные, платежи или файлы будут обрабатываться в {domain['product']}?",
-            "skeptic": f"Какой самый рискованный допуск может сорвать запуск {domain['product']}?",
-        }
         return ClarifyingQuestion(
             agent=agent.name,
             role=agent.slug,
             question=raw_question
-            or questions.get(agent.slug, "Какое главное ограничение нужно учесть перед выбором MVP?"),
+            or self._role_question(agent.slug, domain),
             status="fallback",
             fallback_reason="text" if raw_question else "deterministic",
             error=error,
@@ -531,53 +539,38 @@ class CouncilOrchestrator:
     ) -> MeetingTurn:
         raw_summary = clean_llm_text(raw)
         domain = self._domain_terms(state.idea, state)
-        role_focus = {
-            "product_manager": f"сфокусировать MVP на сценарии {domain['workflow']}",
-            "business_value": f"проверить, что {domain['product']} даёт измеримую пользу",
-            "tech_lead": f"выбрать простую реализацию для {domain['product']}: {domain['workflow']} без лишних интеграций",
-            "ux_researcher": f"проверить понятность выбора и получения результата в {domain['product']}",
-            "security": f"минимизировать данные, платежные риски и доступы в {domain['product']}",
-            "skeptic": f"сузить scope {domain['product']} до проверяемого запуска",
-        }.get(agent.slug, "сфокусировать первую версию")
+        role_payload = self._fallback_role_payload(agent.slug, domain)
         payloads = {
             "analysis": AgentPayload(
-                summary=raw_summary or f"Нужно {role_focus}.",
-                arguments=[f"Для задачи {domain['product']} первая версия должна быть проверяемой и небольшой."],
-                risks=["Слишком широкий scope может сорвать MVP за 4-6 недель."],
-                open_questions=[f"Какой результат пользователь должен получить после сценария {domain['workflow']}?"],
-                insights=[f"Главная ценность MVP — довести сценарий {domain['workflow']} до понятного результата, а не собрать полный продукт."],
+                summary=raw_summary or role_payload["analysis_summary"],
+                arguments=role_payload["arguments"],
+                risks=role_payload["risks"],
+                open_questions=role_payload["open_questions"],
+                insights=role_payload["insights"],
             ),
             "debate": AgentPayload(
-                summary=raw_summary or f"Поддерживаю необходимость сузить решение: нужно {role_focus}.",
-                arguments=["Команде важно сначала доказать полезность одного процесса, а не строить полную систему."],
-                risks=["Без ясного критерия успеха обсуждение уйдёт в список желаемых функций."],
-                insights=["Спор агентов полезен, если приводит к ограничению первой версии."],
+                summary=raw_summary or role_payload["debate_summary"],
+                arguments=role_payload["debate_arguments"],
+                risks=role_payload["risks"][:1],
+                insights=role_payload["insights"][:1],
             ),
             "mvp_proposal": AgentPayload(
-                summary=raw_summary or f"Первая версия должна закрывать сценарий {domain['workflow']}.",
-                mvp_features=domain["mvp_features"],
-                out_of_scope=domain["out_of_scope"],
-                risks=domain["risks"],
-                roadmap_items=[
-                    f"Неделя 1: уточнить сценарий {domain['workflow']} и критерии успеха",
-                    "Неделя 2-3: собрать прототип и основную логику",
-                    "Неделя 4: провести пилот и собрать обратную связь",
-                ],
-                open_questions=domain["open_questions"],
+                summary=raw_summary or role_payload["proposal_summary"],
+                mvp_features=role_payload["mvp_features"],
+                out_of_scope=role_payload["out_of_scope"],
+                risks=role_payload["risks"],
+                roadmap_items=role_payload["roadmap_items"],
+                open_questions=role_payload["open_questions"],
             ),
             "mvp_vote": AgentPayload(
-                summary=raw_summary or "Запускать после уточнения scope и критериев успеха.",
+                summary=raw_summary or role_payload["vote_summary"],
                 decision="go_after_clarification",
-                mvp_features=domain["mvp_features"][:3],
-                risks=domain["risks"],
-                roadmap_items=[
-                    "Неделя 1: зафиксировать MVP",
-                    "Неделя 2-3: реализовать первую версию",
-                    "Неделя 4-6: пилот и доработка",
-                ],
-                open_questions=domain["open_questions"],
-                insights=[f"Лучший следующий шаг — не расширять идею, а проверить сценарий {domain['workflow']}."],
-                next_step="Провести короткое уточнение требований и зафиксировать MVP на один сценарий.",
+                mvp_features=role_payload["mvp_features"][:3],
+                risks=role_payload["risks"],
+                roadmap_items=role_payload["roadmap_items"],
+                open_questions=role_payload["open_questions"],
+                insights=role_payload["insights"],
+                next_step=role_payload["next_step"],
             ),
         }
         fallback_reason = "text" if raw_summary else "deterministic"
@@ -605,27 +598,33 @@ class CouncilOrchestrator:
         return clean_llm_text(raw)
 
     def _build_text_question_messages(self, agent: AgentRole, state: MeetingState) -> list[dict[str, str]]:
+        private_context = self._read_private_context(agent.private_context_path)
+        focus = self._role_focus(agent.slug)
         return [
             {
                 "role": "system",
                 "content": (
                     "Ты участник рабочего IT-созвона. Верни только один короткий вопрос по-русски. "
-                    "Без JSON, markdown, списков, reasoning и объяснений."
+                    "Без JSON, markdown, списков, reasoning и объяснений. "
+                    "Не повторяй вопросы других ролей. Спрашивай строго из своей профессиональной роли."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    f"Роль: {agent.name}. Идея: {state.idea[:400]}. "
+                    f"Роль: {agent.name}. Фокус роли: {focus}. "
+                    f"Приватный контекст роли: {private_context[:260]}. "
+                    f"Идея: {state.idea[:400]}. "
                     f"Ограничения: {(state.constraints or 'не указаны')[:160]}. "
-                    "Задай один вопрос заказчику, который поможет определить MVP."
+                    f"Уже заданные вопросы: {self._format_questions(state)[:500]}. "
+                    "Задай один новый вопрос заказчику, который поможет определить MVP."
                 ),
             },
         ]
 
     def _prefers_text_fallback(self) -> bool:
         model = self.settings.model.lower()
-        return "qwen" in model or "deepseek" in model or "r1" in model
+        return "deepseek" in model or "r1" in model or "qwen3" in model
 
     @staticmethod
     def _domain_terms(idea: str, state: MeetingState | None) -> dict:
@@ -660,12 +659,175 @@ class CouncilOrchestrator:
             }
         return {
             "product": idea.strip()[:120] or "сервис",
-            "workflow": "один основной пользовательский сценарий",
-            "mvp_features": ["Ввод исходных данных", "Обработка основного сценария", "Экспорт или сохранение результата"],
+            "workflow": "ключевой сценарий заказа и получения результата",
+            "mvp_features": ["Ввод исходных данных", "Обработка ключевого сценария", "Экспорт или сохранение результата"],
             "out_of_scope": ["Сложные интеграции", "Расширенная аналитика", "Несколько разных сценариев сразу"],
             "risks": ["Размытый scope", "Неясный владелец процесса"],
             "open_questions": ["Кто принимает итоговое решение по результату пилота?"],
         }
+
+    @staticmethod
+    def _role_focus(role: str) -> str:
+        return {
+            "product_manager": "пользователь, проблема, MVP, приоритеты и критерии успеха",
+            "business_value": "измеримая польза, внедрение, спрос и первый пилот",
+            "tech_lead": "архитектура, данные, интеграции, сроки и технические ограничения",
+            "ux_researcher": "первый пользователь, workflow, трение, onboarding и доверие",
+            "security": "данные, доступы, хранение, платежи, файлы и минимальные меры защиты",
+            "skeptic": "ложные допущения, причины провала, scope creep и способы сузить риск",
+        }.get(role, "MVP и практические ограничения")
+
+    @staticmethod
+    def _role_question(role: str, domain: dict) -> str:
+        return {
+            "product_manager": f"Какой один результат пользователь должен получить в первой версии через сценарий {domain['workflow']}?",
+            "business_value": f"Какой измеримый признак покажет, что {domain['product']} действительно полезен заказчику?",
+            "tech_lead": f"Какие данные, API или внешние сервисы обязательны, чтобы реализовать {domain['workflow']} за 4-6 недель?",
+            "ux_researcher": f"Кто первый пользователь и где сейчас самое болезненное действие в сценарии {domain['workflow']}?",
+            "security": f"Какие персональные данные, платежи, файлы или роли доступа появятся в первой версии {domain['product']}?",
+            "skeptic": f"Какое самое опасное допущение о пользователях, сроках или спросе может сорвать запуск {domain['product']}?",
+        }.get(role, "Какое главное ограничение нужно учесть перед выбором MVP?")
+
+    @staticmethod
+    def _is_duplicate_question(question: str, previous_questions: list[ClarifyingQuestion]) -> bool:
+        normalized = CouncilOrchestrator._normalize_similarity_text(question)
+        if not normalized:
+            return False
+        for previous in previous_questions:
+            previous_normalized = CouncilOrchestrator._normalize_similarity_text(previous.question)
+            if not previous_normalized:
+                continue
+            if normalized == previous_normalized:
+                return True
+            if SequenceMatcher(None, normalized, previous_normalized).ratio() >= 0.72:
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_similarity_text(value: str) -> str:
+        normalized = "".join(char.lower() if char.isalnum() else " " for char in value)
+        stop_words = {
+            "какие",
+            "какой",
+            "какая",
+            "какое",
+            "именно",
+            "нужно",
+            "нужны",
+            "можно",
+            "для",
+            "чтобы",
+            "mvp",
+            "минимально",
+            "жизнеспособного",
+            "продукта",
+            "первой",
+            "версии",
+        }
+        words = [word for word in normalized.split() if word not in stop_words]
+        return " ".join(words)
+
+    @staticmethod
+    def _fallback_role_payload(role: str, domain: dict) -> dict[str, list[str] | str]:
+        product = domain["product"]
+        workflow = domain["workflow"]
+        base = {
+            "analysis_summary": f"Нужно сузить {product} до сценария {workflow}.",
+            "debate_summary": "Поддерживаю сужение scope до проверяемого результата.",
+            "proposal_summary": f"Первая версия должна закрывать сценарий {workflow}.",
+            "vote_summary": "Запускать после уточнения scope и критериев успеха.",
+            "arguments": [f"Для задачи {product} первая версия должна быть проверяемой и небольшой."],
+            "debate_arguments": ["Команде важно сначала доказать полезность одного процесса, а не строить полную систему."],
+            "risks": domain["risks"],
+            "mvp_features": domain["mvp_features"],
+            "out_of_scope": domain["out_of_scope"],
+            "open_questions": domain["open_questions"],
+            "insights": [f"Главная ценность MVP — довести сценарий {workflow} до понятного результата."],
+            "roadmap_items": [
+                f"Неделя 1: уточнить сценарий {workflow} и критерии успеха",
+                "Неделя 2-3: собрать прототип и основную логику",
+                "Неделя 4-6: провести пилот и доработать решение",
+            ],
+            "next_step": "Провести короткое уточнение требований и зафиксировать MVP на один сценарий.",
+        }
+        role_specific = {
+            "product_manager": {
+                "analysis_summary": f"Нужно выбрать один пользовательский результат для {workflow} и не расширять MVP раньше пилота.",
+                "debate_summary": "Продуктово спор полезен только если приводит к явному приоритету первого сценария.",
+                "proposal_summary": "MVP должен включать путь от ввода потребности до понятного результата для пользователя.",
+                "vote_summary": "Запускать после фиксации пользователя, результата и критерия успеха.",
+                "arguments": ["Без одного приоритетного сценария команда будет обсуждать набор функций, а не ценность."],
+                "risks": ["Размытый пользователь и размытый критерий успеха сделают MVP непроверяемым."],
+                "open_questions": [f"Кто первый пользователь {product} и какой результат для него считается успехом?"],
+                "insights": ["Первую версию стоит оценивать по завершённому сценарию, а не по количеству функций."],
+                "next_step": "Зафиксировать первого пользователя, его задачу и критерий успешного пилота.",
+            },
+            "business_value": {
+                "analysis_summary": f"Нужно доказать, что {product} даёт измеримую пользу до расширения функциональности.",
+                "debate_summary": "Бизнес-решение стоит принимать через пилот с метрикой пользы, а не через список пожеланий.",
+                "proposal_summary": "MVP должен включать минимальный пилот и способ измерить эффект внедрения.",
+                "vote_summary": "Запускать после выбора метрики пользы и владельца пилота.",
+                "arguments": ["Даже технически готовый сервис не взлетит без понятного владельца внедрения."],
+                "risks": ["Пользователи могут не перейти на новый процесс, если польза не видна в первые дни."],
+                "open_questions": [f"Какая метрика покажет, что {product} экономит время, деньги или снижает ошибки?"],
+                "insights": ["Ранний пилот должен проверять готовность пользоваться сервисом, а не только качество интерфейса."],
+                "next_step": "Выбрать владельца пилота и одну метрику ценности.",
+            },
+            "tech_lead": {
+                "analysis_summary": f"Нужно проверить данные, API и внешние зависимости для сценария {workflow}.",
+                "debate_summary": "Технический риск лучше снижать отказом от необязательных интеграций в первой версии.",
+                "proposal_summary": "MVP должен использовать простую архитектуру и минимум внешних зависимостей.",
+                "vote_summary": "Запускать после проверки обязательных интеграций и формата данных.",
+                "arguments": ["Срок 4-6 недель реалистичен только при ясных данных и ограниченном числе интеграций."],
+                "risks": ["Платежи, внешние API или неясная модель данных могут стать главным узким местом."],
+                "mvp_features": ["Форма ввода данных", "Основная бизнес-логика", "Минимальное хранение результата"],
+                "out_of_scope": ["Сложные интеграции", "Автоматизация всех исключений", "Масштабирование под высокую нагрузку"],
+                "open_questions": [f"Какие API, данные и сервисы обязательны для первой версии {product}?"],
+                "insights": ["Технический MVP должен сначала подтвердить поток данных, а затем расширять автоматизацию."],
+                "next_step": "Составить список обязательных данных и интеграций для первой версии.",
+            },
+            "ux_researcher": {
+                "analysis_summary": f"Нужно проверить, где пользователь теряет время или доверие в сценарии {workflow}.",
+                "debate_summary": "UX-риск не в красоте интерфейса, а в непонятном первом действии и результате.",
+                "proposal_summary": "MVP должен включать простой workflow, понятные состояния и объяснимый результат.",
+                "vote_summary": "Запускать после проверки сценария на 2-3 будущих пользователях.",
+                "arguments": ["Если пользователь не понимает первый шаг, полезность сервиса не будет проверена."],
+                "risks": ["Слишком сложный onboarding может скрыть реальную ценность продукта."],
+                "mvp_features": ["Понятный стартовый экран", "Пошаговый ввод данных", "Ясный экран результата"],
+                "out_of_scope": ["Сложная персонализация", "Несколько альтернативных workflows", "Расширенная визуальная настройка"],
+                "open_questions": [f"Какое действие в сценарии {workflow} сейчас самое непонятное для первого пользователя?"],
+                "insights": ["Для защиты проекта важнее показать сквозной сценарий, чем широкий набор экранов."],
+                "next_step": "Проверить прототип сценария на нескольких будущих пользователях.",
+            },
+            "security": {
+                "analysis_summary": f"Нужно заранее ограничить данные, роли доступа и хранение в {product}.",
+                "debate_summary": "Безопасность MVP должна быть минимальной, но явной: кто что видит и где это хранится.",
+                "proposal_summary": "MVP должен включать базовые роли, минимизацию данных и понятное хранение результата.",
+                "vote_summary": "Запускать после фиксации данных, доступов и платежных или файловых рисков.",
+                "arguments": ["Даже прототип может обрабатывать чувствительные данные, если есть файлы, платежи или заявки."],
+                "risks": ["Неясные права доступа и хранение файлов могут заблокировать пилот."],
+                "mvp_features": ["Минимальные роли доступа", "Сохранение только нужных данных", "Журнал ключевых действий"],
+                "out_of_scope": ["Сложная IAM-модель", "Полный аудит безопасности", "Хранение лишних персональных данных"],
+                "open_questions": [f"Какие данные, файлы, платежи и роли доступа есть в первой версии {product}?"],
+                "insights": ["Минимизация данных часто дешевле и быстрее сложных защитных механизмов."],
+                "next_step": "Описать типы данных, роли доступа и срок хранения для пилота.",
+            },
+            "skeptic": {
+                "analysis_summary": f"Главный риск {product} — строить слишком широкий сервис без проверки спроса.",
+                "debate_summary": "Я бы не расширял scope, пока не доказано, что пользователям нужен именно этот сценарий.",
+                "proposal_summary": "MVP должен специально проверить самое рискованное допущение, а не имитировать полный продукт.",
+                "vote_summary": "Запускать только после сужения MVP и явного условия остановки пилота.",
+                "arguments": ["Слабое место идеи может быть не в реализации, а в предположении, что пользователи изменят привычный процесс."],
+                "risks": ["Команда может принять техническую готовность за доказанную ценность."],
+                "mvp_features": ["Пилот на одном сценарии", "Проверка критического допущения", "Критерий остановки или продолжения"],
+                "out_of_scope": ["Все дополнительные сценарии", "Функции без проверки спроса", "Доработки для гипотетических пользователей"],
+                "open_questions": [f"Какое допущение о {product} окажется самым дорогим, если оно неверно?"],
+                "insights": ["Хороший MVP должен уметь быстро показать, что идею нужно изменить или сузить."],
+                "next_step": "Назвать одно критическое допущение и способ проверить его за неделю.",
+            },
+        }
+        base.update(role_specific.get(role, {}))
+        return base
 
     @staticmethod
     def _payload_is_empty(payload: AgentPayload) -> bool:
@@ -685,6 +847,8 @@ class CouncilOrchestrator:
         )
 
     def _build_question_messages(self, agent: AgentRole, state: MeetingState) -> list[dict[str, str]]:
+        private_context = self._read_private_context(agent.private_context_path)
+        focus = self._role_focus(agent.slug)
         system = (
             "Return only JSON. No markdown. No reasoning. "
             "Do not use quotation marks inside JSON string values. "
@@ -693,10 +857,13 @@ class CouncilOrchestrator:
         )
         user = (
             f"Role: {agent.name}. "
+            f"Role focus: {focus}. "
+            f"Role private context: {private_context[:260]}. "
             f"Project: {self._project_mode_label(state.project_mode)}. "
             f"Idea: {state.idea[:500]}. "
             f"Constraints: {(state.constraints or 'none')[:220]}. "
-            "Ask one important Russian question for deciding MVP scope, implementation risks, or adoption."
+            f"Already asked: {self._format_questions(state)[:500]}. "
+            "Ask one new Russian question for your role only."
         )
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 

@@ -8,7 +8,7 @@ def make_settings() -> Settings:
     return Settings(
         base_url="http://localhost:1234/v1",
         api_key="lm-studio",
-        model="qwen3.5-9b",
+        model="deepseek-r1-distill-qwen-7b-q4-k-m",
     )
 
 
@@ -20,7 +20,7 @@ def test_list_models_reads_openai_compatible_response(monkeypatch):
             json={
                 "object": "list",
                 "data": [
-                    {"id": "qwen3.5-9b", "object": "model"},
+                    {"id": "deepseek-r1-distill-qwen-7b-q4-k-m", "object": "model"},
                     {"id": "google/gemma-4-e4b", "object": "model"},
                 ],
             },
@@ -30,5 +30,5 @@ def test_list_models_reads_openai_compatible_response(monkeypatch):
 
     client = LMStudioClient(make_settings())
 
-    assert client.list_models() == ["qwen3.5-9b", "google/gemma-4-e4b"]
+    assert client.list_models() == ["deepseek-r1-distill-qwen-7b-q4-k-m", "google/gemma-4-e4b"]
     assert client.is_model_available()

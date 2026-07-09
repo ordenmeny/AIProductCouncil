@@ -3,7 +3,7 @@
 В проекте есть два готовых окружения:
 
 - дома: `Gemma 4 E4B` через `.env.gemma`;
-- на практике или в аудитории: `Qwen 3.5 9B` через `.env.qwen`.
+- на практике или в аудитории: `DeepSeek R1 Distill Qwen 7B Q4_K_M` через `.env.qwen`.
 
 Код менять не нужно. Меняется только файл `.env`.
 
@@ -42,7 +42,7 @@ google/gemma-4-e4b
 
 Если identifier отличается, нужно указать его в `LM_STUDIO_MODEL`.
 
-## Аудитория: Qwen 3.5 9B
+## Аудитория: DeepSeek R1 Distill Qwen 7B Q4_K_M
 
 Для аудитории подготовлен файл:
 
@@ -55,12 +55,12 @@ google/gemma-4-e4b
 ```env
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 LM_STUDIO_API_KEY=lm-studio
-LM_STUDIO_MODEL=qwen/qwen3.5-9b
-LM_STUDIO_TIMEOUT_SECONDS=90
-LM_STUDIO_MAX_TOKENS=700
-LM_STUDIO_QUESTION_MAX_TOKENS=260
-LM_STUDIO_TURN_MAX_TOKENS=700
-LM_STUDIO_ENABLE_REPAIR=true
+LM_STUDIO_MODEL=deepseek-r1-distill-qwen-7b-q4-k-m
+LM_STUDIO_TIMEOUT_SECONDS=60
+LM_STUDIO_MAX_TOKENS=420
+LM_STUDIO_QUESTION_MAX_TOKENS=180
+LM_STUDIO_TURN_MAX_TOKENS=420
+LM_STUDIO_ENABLE_REPAIR=false
 ```
 
 На компьютере в аудитории:
@@ -78,7 +78,7 @@ lms server start --port 1234
 Загрузить модель. Если в LM Studio модель называется иначе, identifier можно выбрать свой:
 
 ```powershell
-lms load qwen/qwen3.5-9b --identifier qwen/qwen3.5-9b --context-length 8192 -y
+lms load deepseek-r1-distill-qwen-7b-q4-k-m --identifier deepseek-r1-distill-qwen-7b-q4-k-m --context-length 8192 -y
 ```
 
 Проверить:
@@ -88,10 +88,10 @@ lms ps
 ```
 
 Важно: значение `LM_STUDIO_MODEL` в `.env` должно совпадать с identifier из `lms ps`.
-Если `lms ps` показывает `qwen/qwen3.5-9b`, в `.env` должно быть ровно:
+Если `lms ps` показывает `deepseek-r1-distill-qwen-7b-q4-k-m`, в `.env` должно быть ровно:
 
 ```env
-LM_STUDIO_MODEL=qwen/qwen3.5-9b
+LM_STUDIO_MODEL=deepseek-r1-distill-qwen-7b-q4-k-m
 ```
 
 Если identifier другой, скопируйте его без изменений.
@@ -114,17 +114,17 @@ http://localhost:8501
 
 1. В интерфейсе не включать `Демо без LLM`.
 2. Нажать `1. Получить вопросы агентов`.
-3. Если вопросы появились со статусом `llm` или `repaired`, модель отвечает.
+3. Если вопросы появились со статусом `text`, `llm` или `fallback`, приложение получает ответ модели или корректно включает резервный режим.
 4. Ответить на вопросы.
 5. Нажать `2. Провести созвон`.
-6. Проверить, что в метриках есть ответы `LLM`, а не только `Failed`.
+6. Проверить, что в метриках есть ответы `Text`, `LLM` или `Fallback`, а не только `Failed`.
 
-Если много `Failed`, увеличьте таймаут:
+Если много `Failed`, увеличьте таймаут и лимит ответа:
 
 ```env
 LM_STUDIO_TIMEOUT_SECONDS=90
 LM_STUDIO_MAX_TOKENS=600
-LM_STUDIO_QUESTION_MAX_TOKENS=260
+LM_STUDIO_QUESTION_MAX_TOKENS=220
 LM_STUDIO_TURN_MAX_TOKENS=600
 ```
 
@@ -134,4 +134,6 @@ LM_STUDIO_TURN_MAX_TOKENS=600
 LM_STUDIO_ENABLE_REPAIR=true
 ```
 
-Для Gemma дома repair лучше держать выключенным: она часто начинает объяснять ход рассуждений вместо исправления JSON.
+Для Gemma и DeepSeek R1 repair лучше держать выключенным: reasoning-модели часто начинают объяснять ход рассуждений вместо исправления JSON.
+
+Если в браузере появляется `NotFoundError removeChild`, отключите авто-перевод или расширение переводчика для `localhost:8501`. Переводчик меняет DOM Streamlit/React и может ломать перерисовку страницы.

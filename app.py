@@ -126,6 +126,11 @@ st.set_page_config(page_title="AI Product Council", layout="wide")
 
 st.title("AI Product Council")
 st.caption("Рабочий созвон ИИ-агентов для MVP нового сервиса или фичи")
+st.info(
+    "Если после ответа на вопросы появляется `NotFoundError removeChild`, "
+    "отключите авто-перевод или расширение переводчика для `localhost:8501`. "
+    "Переводчик меняет DOM Streamlit/React и ломает перерисовку страницы.",
+)
 
 settings = load_settings()
 
