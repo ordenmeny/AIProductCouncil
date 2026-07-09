@@ -1,8 +1,19 @@
+@import url("https://fonts.googleapis.com/css2?family=Commissioner:wght@400;500;600;700;800;900&display=swap");
+
 :root {
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #172026;
-  background: #f5f7f8;
+  --color-primary: #ff9f02;
+  --color-primary-shadow: rgba(255, 158, 0, 0.4);
+  --color-red: #ff573f;
+  --color-green: #a6e048;
+  --color-text: #20170d;
+  --color-muted: #6e6254;
+  --color-line: rgba(255, 159, 2, 0.24);
+  --color-surface: #fffaf2;
+  --color-surface-strong: #ffffff;
+  --shadow-primary: 0 18px 50px -2px var(--color-primary-shadow);
+  background: #fff4e0;
+  color: var(--color-text);
+  font-family: Commissioner, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,11 +31,11 @@ button,
 a {
   align-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: 18px;
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-weight: 700;
+  font-weight: 800;
   gap: 8px;
   justify-content: center;
   min-height: 42px;
@@ -33,8 +44,9 @@ a {
 }
 
 button {
-  background: #1967d2;
-  color: #fff;
+  background: var(--color-primary);
+  box-shadow: 0 10px 26px -8px var(--color-primary-shadow);
+  color: var(--color-text);
 }
 
 button:disabled {
@@ -43,8 +55,8 @@ button:disabled {
 }
 
 a {
-  background: #e7edf3;
-  color: #172026;
+  background: rgba(255, 159, 2, 0.14);
+  color: var(--color-text);
 }
 
 .app-shell {
@@ -78,44 +90,44 @@ h1 {
 }
 
 .topbar p {
-  color: #5a6872;
+  color: var(--color-muted);
   margin-top: 8px;
 }
 
 .phase-pill {
-  background: #dff3ea;
-  border: 1px solid #acd8c5;
+  background: rgba(166, 224, 72, 0.28);
+  border: 1px solid rgba(95, 151, 22, 0.22);
   border-radius: 999px;
-  color: #146246;
+  color: #2f5d05;
   flex: none;
-  font-weight: 800;
+  font-weight: 900;
   padding: 9px 14px;
 }
 
 .idea-form,
 .panel {
-  background: #fff;
-  border: 1px solid #dde4ea;
-  border-radius: 8px;
-  box-shadow: 0 10px 30px rgba(25, 40, 55, 0.06);
+  background: var(--color-surface-strong);
+  border: 1px solid var(--color-line);
+  border-radius: 36px;
+  box-shadow: var(--shadow-primary);
 }
 
 .idea-form {
   display: grid;
   gap: 16px;
-  padding: 24px;
+  padding: 28px;
 }
 
 label {
-  color: #34444f;
+  color: #3b2a16;
   font-weight: 800;
 }
 
 textarea {
-  background: #fbfcfd;
-  border: 1px solid #cfd8df;
-  border-radius: 8px;
-  color: #172026;
+  background: var(--color-surface);
+  border: 1px solid rgba(255, 159, 2, 0.34);
+  border-radius: 24px;
+  color: var(--color-text);
   font: inherit;
   line-height: 1.45;
   min-height: 128px;
@@ -125,8 +137,8 @@ textarea {
 }
 
 textarea:focus {
-  border-color: #1967d2;
-  box-shadow: 0 0 0 3px rgba(25, 103, 210, 0.12);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(255, 159, 2, 0.18);
   outline: 0;
 }
 
@@ -138,12 +150,12 @@ textarea:focus {
 }
 
 .panel {
-  padding: 20px;
+  padding: 24px;
 }
 
 .panel-heading {
   align-items: flex-start;
-  border-bottom: 1px solid #e7edf3;
+  border-bottom: 1px solid var(--color-line);
   display: flex;
   gap: 16px;
   justify-content: space-between;
@@ -152,7 +164,7 @@ textarea:focus {
 }
 
 .eyebrow {
-  color: #6a7780;
+  color: var(--color-red);
   display: block;
   font-size: 12px;
   font-weight: 900;
@@ -162,9 +174,9 @@ textarea:focus {
 }
 
 .question-form {
-  background: #f7fafb;
-  border: 1px solid #dde4ea;
-  border-radius: 8px;
+  background: rgba(255, 159, 2, 0.08);
+  border: 1px solid var(--color-line);
+  border-radius: 28px;
   display: grid;
   gap: 14px;
   margin-bottom: 20px;
@@ -183,25 +195,25 @@ textarea:focus {
 }
 
 .question-item {
-  background: #fff;
-  border: 1px solid #e2e8ee;
-  border-radius: 8px;
+  background: #fffefb;
+  border: 1px solid rgba(255, 159, 2, 0.22);
+  border-radius: 22px;
   display: grid;
   gap: 8px;
   padding: 14px;
 }
 
 .question-item span {
-  color: #1967d2;
+  color: var(--color-red);
   font-size: 13px;
 }
 
 .question-item strong {
-  color: #172026;
+  color: var(--color-text);
 }
 
 .question-item em {
-  color: #60717d;
+  color: var(--color-muted);
   font-size: 14px;
   font-style: normal;
   font-weight: 500;
@@ -217,8 +229,9 @@ textarea:focus {
 }
 
 .message {
-  border: 1px solid #e3e9ee;
-  border-radius: 8px;
+  background: #fffefb;
+  border: 1px solid rgba(255, 159, 2, 0.22);
+  border-radius: 24px;
   padding: 16px;
 }
 
@@ -235,15 +248,15 @@ textarea:focus {
 }
 
 .message header small {
-  background: #edf2f7;
+  background: rgba(166, 224, 72, 0.28);
   border-radius: 999px;
-  color: #52616b;
+  color: #2f5d05;
   font-weight: 800;
   padding: 5px 9px;
 }
 
 .message p {
-  color: #2a3943;
+  color: #352719;
   line-height: 1.5;
   white-space: pre-wrap;
 }
@@ -263,13 +276,13 @@ textarea:focus {
 }
 
 .summary-block {
-  border-left: 4px solid #1967d2;
+  border-left: 5px solid var(--color-green);
   margin-top: 12px;
   padding-left: 12px;
 }
 
 .summary-block p {
-  color: #52616b;
+  color: var(--color-muted);
   line-height: 1.45;
   margin-top: 8px;
 }
@@ -281,9 +294,9 @@ textarea:focus {
 }
 
 .error-list {
-  background: #fff5f5;
-  border: 1px solid #ffd4d4;
-  border-radius: 8px;
+  background: #fff2ef;
+  border: 1px solid rgba(255, 87, 63, 0.32);
+  border-radius: 22px;
   margin-top: 18px;
   padding: 12px;
 }
@@ -294,7 +307,7 @@ textarea:focus {
 }
 
 .error-list p {
-  color: #8a2424;
+  color: #9b291c;
   font-size: 13px;
   line-height: 1.35;
 }
@@ -310,19 +323,19 @@ textarea:focus {
 }
 
 .tabs button {
-  background: #e8eef4;
-  color: #172026;
+  background: rgba(255, 159, 2, 0.14);
+  color: var(--color-text);
 }
 
 .tabs button.active {
-  background: #1967d2;
+  background: var(--color-red);
   color: #fff;
 }
 
 pre {
-  background: #111820;
-  border-radius: 8px;
-  color: #e9f2f5;
+  background: #22180d;
+  border-radius: 24px;
+  color: #fff8ea;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 13px;
   line-height: 1.5;
@@ -334,18 +347,18 @@ pre {
 }
 
 .muted {
-  color: #687782;
+  color: var(--color-muted);
   line-height: 1.5;
 }
 
 .toast {
-  background: #fff1f1;
-  border: 1px solid #ffcbcb;
-  border-radius: 8px;
+  background: #fff2ef;
+  border: 1px solid rgba(255, 87, 63, 0.34);
+  border-radius: 24px;
   bottom: 24px;
-  box-shadow: 0 14px 32px rgba(35, 20, 20, 0.18);
-  color: #8a2424;
-  font-weight: 700;
+  box-shadow: 0 18px 50px -2px rgba(255, 87, 63, 0.28);
+  color: #9b291c;
+  font-weight: 800;
   left: 50%;
   max-width: min(760px, calc(100vw - 32px));
   padding: 14px 16px;
