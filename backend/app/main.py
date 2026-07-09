@@ -54,7 +54,7 @@ def load_meeting_or_404(storage: MeetingStorage, meeting_id: str) -> MeetingStat
 def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
     return {
         "status": "ok",
-        "app_version": "0.1.3",
+        "app_version": "0.1.4",
         "model": settings.openai_model,
         "base_url": settings.openai_base_url,
         "response_format_json": settings.llm_use_response_format,
@@ -64,7 +64,7 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
 @app.get("/api/debug/config")
 def debug_config(settings: Settings = Depends(get_settings)) -> dict[str, str | int | float | bool]:
     return {
-        "app_version": "0.1.3",
+        "app_version": "0.1.4",
         "env_file": ".env",
         "openai_base_url": settings.openai_base_url,
         "openai_model": settings.openai_model,
@@ -74,6 +74,19 @@ def debug_config(settings: Settings = Depends(get_settings)) -> dict[str, str | 
         "llm_timeout_seconds": settings.llm_timeout_seconds,
         "llm_use_response_format": settings.llm_use_response_format,
     }
+
+
+@app.get("/api/debug/routes")
+def debug_routes() -> list[dict[str, object]]:
+    return [
+        {
+            "path": route.path,
+            "methods": sorted(route.methods or []),
+            "name": route.name,
+        }
+        for route in app.routes
+        if route.path.startswith("/api")
+    ]
 
 
 @app.get("/api/llm/health")
@@ -120,11 +133,6 @@ async def create_meeting(
     meeting = await orchestrator.create_meeting(request.idea)
     storage.save(meeting)
     return CreateMeetingResponse(meeting=meeting)
-
-
-@app.get("/api/meetings/{meeting_id}", response_model=MeetingState)
-def get_meeting(meeting_id: str, storage: MeetingStorage = Depends(get_storage)) -> MeetingState:
-    return load_meeting_or_404(storage, meeting_id)
 
 
 @app.post("/api/meetings/{meeting_id}/answers", response_model=MeetingState)
@@ -179,3 +187,8 @@ def export_final_plan(meeting_id: str, storage: MeetingStorage = Depends(get_sto
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{meeting_id}-final-plan.md"'},
     )
+
+
+@app.get("/api/meetings/{meeting_id}", response_model=MeetingState)
+def get_meeting(meeting_id: str, storage: MeetingStorage = Depends(get_storage)) -> MeetingState:
+    return load_meeting_or_404(storage, meeting_id)
