@@ -53,7 +53,13 @@ function App() {
       question_id: question.id,
       answer: answers[question.id]?.trim() || "Пока нет точного ответа; агент может зафиксировать разумное допущение."
     }));
-    run(() => submitAnswers(meeting.id, payload), setMeeting);
+    run(
+      async () => {
+        await submitAnswers(meeting.id, payload);
+        return advanceMeeting(meeting.id);
+      },
+      setMeeting
+    );
   }
 
   function advance() {
@@ -215,7 +221,7 @@ function QuestionForm({
       ))}
       <button type="submit" disabled={loading}>
         {loading ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
-        Сохранить ответы
+        Сохранить ответы и начать анализ
       </button>
     </form>
   );
