@@ -54,9 +54,25 @@ def load_meeting_or_404(storage: MeetingStorage, meeting_id: str) -> MeetingStat
 def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
     return {
         "status": "ok",
+        "app_version": "0.1.2",
         "model": settings.openai_model,
         "base_url": settings.openai_base_url,
         "response_format_json": settings.llm_use_response_format,
+    }
+
+
+@app.get("/api/debug/config")
+def debug_config(settings: Settings = Depends(get_settings)) -> dict[str, str | int | float | bool]:
+    return {
+        "app_version": "0.1.2",
+        "env_file": ".env",
+        "openai_base_url": settings.openai_base_url,
+        "openai_model": settings.openai_model,
+        "llm_temperature": settings.llm_temperature,
+        "llm_max_tokens": settings.llm_max_tokens,
+        "llm_json_retries": settings.llm_json_retries,
+        "llm_timeout_seconds": settings.llm_timeout_seconds,
+        "llm_use_response_format": settings.llm_use_response_format,
     }
 
 
