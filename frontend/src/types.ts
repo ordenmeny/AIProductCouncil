@@ -56,6 +56,17 @@ export interface AgentStructuredResponse {
   decision: VoteDecision | null;
   next_step: string;
   reason: string;
+  target_audience: string[];
+  user_problem: string[];
+  core_mvp_features: string[];
+  tech_stack: string[];
+  tech_stack_reasoning: string[];
+  user_scenario: string[];
+  user_screens: string[];
+  processed_data: string[];
+  data_sensitivity: string[];
+  security_measures: string[];
+  risk_mitigations: string[];
 }
 
 export interface AgentMessage {

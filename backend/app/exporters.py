@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from backend.app.models import AgentMessage, AgentPhase, FinalDocuments, MeetingState, VoteDecision, VoteSummary
+from backend.app.models import AgentId, AgentMessage, AgentPhase, AgentStructuredResponse, FinalDocuments, MeetingState, VoteDecision, VoteSummary
 
 
 def _bullet(items: list[str]) -> str:
@@ -110,6 +110,7 @@ def build_protocol(meeting: MeetingState) -> str:
 def build_final_plan(meeting: MeetingState, summary: VoteSummary) -> str:
     vote_label = _decision_label(summary.final_decision)
     roadmap = _collect_roadmap(meeting.messages)
+    agent_briefs = _build_agent_briefs(meeting.messages)
     return "\n".join(
         [
             "# Итоговый план проекта",
@@ -130,6 +131,10 @@ def build_final_plan(meeting: MeetingState, summary: VoteSummary) -> str:
             "",
             _bullet(roadmap),
             "",
+            "## Выжимки агентов",
+            "",
+            agent_briefs,
+            "",
             "## Ключевые риски",
             "",
             _bullet(summary.key_risks),
@@ -146,6 +151,139 @@ def build_final_plan(meeting: MeetingState, summary: VoteSummary) -> str:
             "",
             summary.main_next_step,
             "",
+        ]
+    )
+
+
+def _build_agent_briefs(messages: list[AgentMessage]) -> str:
+    responses = _latest_agent_responses(messages)
+    sections = [
+        _product_brief(responses.get(AgentId.PRODUCT)),
+        _tech_brief(responses.get(AgentId.TECH)),
+        _ux_brief(responses.get(AgentId.UX)),
+        _security_brief(responses.get(AgentId.SECURITY)),
+        _skeptic_brief(responses.get(AgentId.SKEPTIC)),
+    ]
+    return "\n\n".join(section for section in sections if section.strip())
+
+
+def _latest_agent_responses(messages: list[AgentMessage]) -> dict[AgentId, AgentStructuredResponse | None]:
+    result: dict[AgentId, AgentStructuredResponse | None] = {}
+    for agent_id in AgentId:
+        agent_messages = [message for message in messages if message.agent_id == agent_id and message.structured]
+        vote_response = next(
+            (message.structured for message in reversed(agent_messages) if message.phase == AgentPhase.VOTE and message.structured),
+            None,
+        )
+        result[agent_id] = vote_response or _merge_latest_non_empty(agent_messages)
+    return result
+
+
+def _merge_latest_non_empty(messages: list[AgentMessage]) -> AgentStructuredResponse | None:
+    if not messages:
+        return None
+    base = messages[-1].structured
+    if not base:
+        return None
+    data = base.model_dump()
+    list_fields = [
+        "target_audience",
+        "user_problem",
+        "core_mvp_features",
+        "tech_stack",
+        "tech_stack_reasoning",
+        "user_scenario",
+        "user_screens",
+        "processed_data",
+        "data_sensitivity",
+        "security_measures",
+        "risks",
+        "risk_mitigations",
+    ]
+    for field in list_fields:
+        if data.get(field):
+            continue
+        for message in reversed(messages):
+            response = message.structured
+            values = getattr(response, field, []) if response else []
+            if values:
+                data[field] = values
+                break
+    return AgentStructuredResponse.model_validate(data)
+
+
+def _product_brief(response: AgentStructuredResponse | None) -> str:
+    return "\n".join(
+        [
+            "### Product/Business Manager",
+            "",
+            "**Целевая аудитория:**",
+            _bullet(response.target_audience if response else []),
+            "",
+            "**Проблема пользователя:**",
+            _bullet(response.user_problem if response else []),
+            "",
+            "**Основные функции MVP:**",
+            _bullet((response.core_mvp_features or response.mvp_priority) if response else []),
+        ]
+    )
+
+
+def _tech_brief(response: AgentStructuredResponse | None) -> str:
+    return "\n".join(
+        [
+            "### Tech Lead / Architect",
+            "",
+            "**Технологии MVP:**",
+            _bullet(response.tech_stack if response else []),
+            "",
+            "**Почему выбран этот стек:**",
+            _bullet(response.tech_stack_reasoning if response else []),
+        ]
+    )
+
+
+def _ux_brief(response: AgentStructuredResponse | None) -> str:
+    return "\n".join(
+        [
+            "### UX Researcher / Designer",
+            "",
+            "**Пользовательский сценарий MVP:**",
+            _bullet(response.user_scenario if response else []),
+            "",
+            "**Экраны / страницы / модули:**",
+            _bullet(response.user_screens if response else []),
+        ]
+    )
+
+
+def _security_brief(response: AgentStructuredResponse | None) -> str:
+    return "\n".join(
+        [
+            "### Security / Data Expert",
+            "",
+            "**Обрабатываемые данные:**",
+            _bullet(response.processed_data if response else []),
+            "",
+            "**Чувствительность данных:**",
+            _bullet(response.data_sensitivity if response else []),
+            "",
+            "**Меры защиты данных:**",
+            _bullet(response.security_measures if response else []),
+        ]
+    )
+
+
+def _skeptic_brief(response: AgentStructuredResponse | None) -> str:
+    return "\n".join(
+        [
+            "### Skeptic / Risk Officer",
+            "",
+            "**Основные риски:**",
+            _bullet(response.risks if response else []),
+            "",
+            "**Пути снижения рисков:**",
+            _bullet(response.risk_mitigations if response else []),
         ]
     )
 

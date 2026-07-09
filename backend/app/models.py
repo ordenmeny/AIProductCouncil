@@ -95,6 +95,17 @@ class AgentStructuredResponse(BaseModel):
     decision: VoteDecision | None = None
     next_step: str = ""
     reason: str = ""
+    target_audience: list[str] = Field(default_factory=list)
+    user_problem: list[str] = Field(default_factory=list)
+    core_mvp_features: list[str] = Field(default_factory=list)
+    tech_stack: list[str] = Field(default_factory=list)
+    tech_stack_reasoning: list[str] = Field(default_factory=list)
+    user_scenario: list[str] = Field(default_factory=list)
+    user_screens: list[str] = Field(default_factory=list)
+    processed_data: list[str] = Field(default_factory=list)
+    data_sensitivity: list[str] = Field(default_factory=list)
+    security_measures: list[str] = Field(default_factory=list)
+    risk_mitigations: list[str] = Field(default_factory=list)
 
 
 class AgentMessage(BaseModel):
