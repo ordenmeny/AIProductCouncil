@@ -8,7 +8,12 @@ from pydantic import ValidationError
 
 from ai_product_council.agents import get_default_agents
 from ai_product_council.config import Settings, load_settings
-from ai_product_council.json_utils import clean_llm_text, extract_json_object, extract_question_from_text
+from ai_product_council.json_utils import (
+    clean_llm_text,
+    extract_json_object,
+    extract_question_from_text,
+    is_russian_user_facing_text,
+)
 from ai_product_council.llm_client import LLMClientError, LMStudioClient
 from ai_product_council.models import (
     AgentPayload,
@@ -136,7 +141,7 @@ class CouncilOrchestrator:
         if status == "failed":
             return self._fallback_question(agent, state, raw, error)
         payload = self._parse_payload(raw, agent.name, "clarifying_questions")
-        if not payload.question.strip():
+        if not is_russian_user_facing_text(payload.question):
             return self._fallback_question(agent, state, raw, "LLM returned an empty question")
         return ClarifyingQuestion(
             agent=agent.name,
@@ -158,8 +163,8 @@ class CouncilOrchestrator:
         if status == "failed":
             return self._fallback_turn(agent, phase, state, raw, error)
         payload = self._parse_payload(raw, agent.name, phase)
-        if self._payload_is_empty(payload):
-            return self._fallback_turn(agent, phase, state, raw, "LLM returned empty or placeholder content")
+        if self._payload_is_empty(payload) or not self._payload_is_russian(payload):
+            return self._fallback_turn(agent, phase, state, raw, "LLM returned empty, placeholder, or non-Russian content")
         return MeetingTurn(
             agent=agent.name,
             role=agent.slug,
@@ -177,6 +182,8 @@ class CouncilOrchestrator:
             private_context,
             (
                 "Return one valid JSON object only. No markdown. No reasoning. "
+                "Russian only. No English words or explanations. "
+                "If you want to reason, do not output reasoning. "
                 "Do not use quotation marks inside JSON string values. "
                 "Never write ellipsis, placeholder text, TBD, or empty-looking content. "
                 "If a list has no useful items, return an empty array. "
@@ -538,6 +545,8 @@ class CouncilOrchestrator:
         error: str | None,
     ) -> MeetingTurn:
         raw_summary = clean_llm_text(raw)
+        if self._is_reasoning_model() and not is_russian_user_facing_text(raw_summary):
+            raw_summary = ""
         domain = self._domain_terms(state.idea, state)
         role_payload = self._fallback_role_payload(agent.slug, domain)
         payloads = {
@@ -606,6 +615,8 @@ class CouncilOrchestrator:
                 "content": (
                     "Ты участник рабочего IT-созвона. Верни только один короткий вопрос по-русски. "
                     "Без JSON, markdown, списков, reasoning и объяснений. "
+                    "Ответ должен быть только на русском. Английские фразы запрещены. "
+                    "Если хочется рассуждать, не выводи рассуждения. "
                     "Не повторяй вопросы других ролей. Спрашивай строго из своей профессиональной роли."
                 ),
             },
@@ -623,6 +634,9 @@ class CouncilOrchestrator:
         ]
 
     def _prefers_text_fallback(self) -> bool:
+        return self._is_reasoning_model()
+
+    def _is_reasoning_model(self) -> bool:
         model = self.settings.model.lower()
         return "deepseek" in model or "r1" in model or "qwen3" in model
 
@@ -633,8 +647,8 @@ class CouncilOrchestrator:
         ).lower()
         if any(word in text for word in ["шрифт", "font", "лиценз", "eula"]):
             return {
-                "product": "сайт продажи шрифтов",
-                "workflow": "выбор шрифта, проверка начертания, покупка лицензии и получение файла",
+                "product": "сайт по продаже шрифтов",
+                "workflow": "сценарий выбора шрифта, проверки начертания, покупки лицензии и получения файла",
                 "mvp_features": [
                     "Каталог шрифтов с фильтрами",
                     "Карточка шрифта с live preview",
@@ -846,11 +860,30 @@ class CouncilOrchestrator:
             ]
         )
 
+    @staticmethod
+    def _payload_is_russian(payload: AgentPayload) -> bool:
+        values = [
+            payload.summary,
+            payload.question,
+            payload.next_step,
+            *payload.arguments,
+            *payload.risks,
+            *payload.mvp_features,
+            *payload.out_of_scope,
+            *payload.open_questions,
+            *payload.insights,
+            *payload.roadmap_items,
+        ]
+        useful_values = [value for value in values if value.strip()]
+        return bool(useful_values) and all(is_russian_user_facing_text(value) for value in useful_values)
+
     def _build_question_messages(self, agent: AgentRole, state: MeetingState) -> list[dict[str, str]]:
         private_context = self._read_private_context(agent.private_context_path)
         focus = self._role_focus(agent.slug)
         system = (
             "Return only JSON. No markdown. No reasoning. "
+            "Russian only. No English words or explanations. "
+            "If you want to reason, do not output reasoning. "
             "Do not use quotation marks inside JSON string values. "
             "Never write ellipsis, placeholder text, TBD, or empty-looking content. "
             'Schema keys: question string, summary string.'
@@ -872,6 +905,7 @@ class CouncilOrchestrator:
             f"{agent.system_prompt}\n"
             "Ты участник рабочего созвона IT-команды. Отвечай кратко, конкретно, по-русски. "
             "Не показывай ход рассуждений. Не повторяй других агентов. "
+            "Ответ должен быть только на русском. Английские фразы и объяснение процесса ответа запрещены. "
             "Используй только свою роль и приватный контекст.\n\n"
             f"Приватный контекст роли:\n{private_context}\n\n"
             f"{schema}"

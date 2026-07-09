@@ -36,3 +36,31 @@ def test_extract_question_rejects_reasoning_text():
     raw = "Thinking Process: Role: PM. Constraints: MVP? Какой сценарий важнее?"
 
     assert extract_question_from_text(raw) == ""
+
+
+def test_clean_llm_text_rejects_english_reasoning():
+    raw = "Okay, I'm trying to define the MVP for a font license website."
+
+    assert clean_llm_text(raw) == ""
+    assert extract_question_from_text(raw) == ""
+
+
+def test_clean_llm_text_rejects_mixed_reasoning_text():
+    raw = (
+        "Хорошо, нужно структурировать ответ в JSON: summary, risks, insights. "
+        "Let me break it down step by step."
+    )
+
+    assert clean_llm_text(raw) == ""
+
+
+def test_clean_llm_text_rejects_cjk_symbols():
+    raw = "Хорошо, пользователь 扮演 UX Researcher и спрашивает что делать 下一步."
+
+    assert clean_llm_text(raw) == ""
+
+
+def test_extract_question_accepts_clean_russian_question():
+    raw = "Какие способы оплаты обязательны для первой версии сайта по продаже шрифтов?"
+
+    assert extract_question_from_text(raw) == raw

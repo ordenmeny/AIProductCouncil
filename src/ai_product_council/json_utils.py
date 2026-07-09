@@ -8,7 +8,16 @@ from json import JSONDecodeError
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 MARKDOWN_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff]")
 REASONING_MARKERS = (
+    "okay",
+    "i'm",
+    "i am",
+    "i need",
+    "i should",
+    "let me",
+    "step by step",
+    "reasoning",
     "thinking process",
     "analyze the request",
     "role:",
@@ -92,13 +101,22 @@ def extract_question_from_text(text: str) -> str:
     return candidate[:260]
 
 
+def is_russian_user_facing_text(text: str) -> bool:
+    return _looks_user_facing(text)
+
+
 def _looks_user_facing(text: str) -> bool:
     if not text or _has_reasoning_marker(text):
         return False
     if "{" in text[:20] or "}" in text:
         return False
+    if CJK_RE.search(text):
+        return False
     letters = [char for char in text if char.isalpha()]
-    return len(letters) >= 12
+    if len(letters) < 12:
+        return False
+    cyrillic_letters = [char for char in letters if "а" <= char.lower() <= "я" or char.lower() == "ё"]
+    return len(cyrillic_letters) / len(letters) >= 0.55
 
 
 def _has_reasoning_marker(text: str) -> bool:

@@ -95,7 +95,19 @@ def _contains_reasoning_marker(value: str) -> bool:
     lowered = value.lower()
     return any(
         marker in lowered
-        for marker in ("thinking process", "analyze the request", "return only json", "schema keys", "<think>")
+        for marker in (
+            "okay",
+            "i'm",
+            "i need",
+            "let me",
+            "step by step",
+            "reasoning",
+            "thinking process",
+            "analyze the request",
+            "return only json",
+            "schema keys",
+            "<think>",
+        )
     )
 
 

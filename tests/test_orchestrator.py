@@ -130,6 +130,7 @@ def test_reasoning_question_uses_domain_fallback_instead_of_raw_reasoning():
     assert question.fallback_reason == "deterministic"
     assert "Thinking Process" not in question.question
     assert "шрифт" in question.question
+    assert "Okay" not in question.question
 
 
 def test_failed_turn_uses_fallback_payload():
@@ -230,14 +231,79 @@ def test_reasoning_turn_is_not_used_as_summary():
     assert turn.status == "fallback"
     assert turn.fallback_reason == "deterministic"
     assert "Thinking Process" not in turn.payload.summary
-    assert "сайт продажи шрифтов" in turn.payload.summary
+    assert "сайт по продаже шрифтов" in turn.payload.summary
+
+
+def test_deepseek_reasoning_turn_uses_deterministic_summary():
+    raw = "Okay, so I'm trying to figure out how to create an MVP for this typography license website."
+    client = FakeClient([raw])
+    agent = make_agent("Tech Lead", "tech_lead")
+    settings = Settings(
+        base_url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        model="deepseek-r1-distill-qwen-7b-q4-k-m",
+    )
+    orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=[agent])
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+
+    turn = orchestrator.ask_agent_turn(agent, "analysis", state)
+
+    assert turn.status == "fallback"
+    assert turn.fallback_reason == "deterministic"
+    assert "Okay" not in turn.payload.summary
+    assert "I'm" not in turn.payload.summary
+    assert "сайт по продаже шрифтов" in turn.payload.summary
+
+
+def test_valid_json_with_english_reasoning_falls_back_to_russian_payload():
+    raw = '{"summary":"Okay, I need to define the MVP step by step.","confidence":3}'
+    client = FakeClient([raw])
+    agent = make_agent("Product Manager", "product_manager")
+    settings = Settings(
+        base_url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        model="deepseek-r1-distill-qwen-7b-q4-k-m",
+    )
+    orchestrator = CouncilOrchestrator(llm_client=client, settings=settings, agents=[agent])
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+
+    turn = orchestrator.ask_agent_turn(agent, "analysis", state)
+
+    assert turn.status == "fallback"
+    assert "Okay" not in turn.payload.summary
+    assert "сайт продажи шрифтов" not in turn.payload.summary
+
+
+def test_font_fallback_templates_are_clean_russian():
+    agents = [
+        make_agent("Product Manager", "product_manager"),
+        make_agent("Tech Lead", "tech_lead"),
+        make_agent("UX Researcher", "ux_researcher"),
+        make_agent("Security", "security"),
+        make_agent("Skeptic", "skeptic"),
+    ]
+    orchestrator = CouncilOrchestrator(llm_client=FakeClient([]), agents=agents)
+    state = MeetingState(idea="Сайт для продажи шрифтов")
+
+    texts = []
+    for agent in agents:
+        texts.append(orchestrator._fallback_question(agent, state, "", "failed").question)
+        turn = orchestrator._fallback_turn(agent, "analysis", state, "", "failed")
+        texts.append(turn.payload.summary)
+        texts.extend(turn.payload.open_questions)
+
+    joined = "\n".join(texts)
+    banned = ["Okay", "I'm", "Let me", "step by step", "сайт продажи шрифтов", "для выбор шрифта"]
+    assert not any(item in joined for item in banned)
+    assert "сайт по продаже шрифтов" in joined
+    assert "сценарий выбора шрифта" in joined
 
 
 def test_repair_invalid_json_object_once():
     client = FakeClient(
         [
             '{"summary": 123}',
-            '{"summary":"fixed","confidence":3,"decision":"unknown"}',
+            '{"summary":"Ответ исправлен","confidence":3,"decision":"unknown"}',
         ]
     )
     agent = make_agent()
@@ -253,7 +319,7 @@ def test_repair_invalid_json_object_once():
     turn = orchestrator.ask_agent_turn(agent, "analysis", state)
 
     assert turn.status == "repaired"
-    assert turn.payload.summary == "fixed"
+    assert turn.payload.summary == "Ответ исправлен"
     assert len(client.messages) == 2
 
 
@@ -350,11 +416,13 @@ def test_private_context_is_not_mixed_between_agents(tmp_path: Path):
 
     pm_messages = orchestrator.build_messages(pm, "analysis", state)
     tech_messages = orchestrator.build_messages(tech, "analysis", state)
+    pm_content = "\n".join(message["content"] for message in pm_messages)
+    tech_content = "\n".join(message["content"] for message in tech_messages)
 
-    assert "PM_SECRET" in pm_messages[1]["content"]
-    assert "TECH_SECRET" not in pm_messages[1]["content"]
-    assert "TECH_SECRET" in tech_messages[1]["content"]
-    assert "PM_SECRET" not in tech_messages[1]["content"]
+    assert "PM_SECRET" in pm_content
+    assert "TECH_SECRET" not in pm_content
+    assert "TECH_SECRET" in tech_content
+    assert "PM_SECRET" not in tech_content
 
 
 def test_markdown_outputs_include_transcript_and_final_plan():
