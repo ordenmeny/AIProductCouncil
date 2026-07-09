@@ -248,6 +248,7 @@ def _parse_agent_response(raw: str, agent: AgentDefinition, phase: AgentPhase) -
         payload: dict[str, Any] = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON: {exc}") from exc
+    payload = _normalize_payload(payload)
     payload.setdefault("agent", agent.role.name)
     payload.setdefault("agent_id", agent.role.id)
     payload.setdefault("phase", phase)
@@ -262,6 +263,127 @@ def _parse_agent_response(raw: str, agent: AgentDefinition, phase: AgentPhase) -
     if not parsed.agent:
         parsed.agent = agent.role.name
     return parsed
+
+
+def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    list_string_fields = [
+        "mvp_priority",
+        "roadmap_items",
+        "open_questions",
+        "insights",
+        "risks",
+        "target_audience",
+        "user_problem",
+        "core_mvp_features",
+        "tech_stack",
+        "tech_stack_reasoning",
+        "user_scenario",
+        "user_screens",
+        "processed_data",
+        "data_sensitivity",
+        "security_measures",
+        "risk_mitigations",
+    ]
+    for field in list_string_fields:
+        if field in normalized:
+            normalized[field] = _normalize_string_list(normalized[field])
+
+    risk_mitigations = list(normalized.get("risk_mitigations") or [])
+    for item in _as_list(payload.get("risks")):
+        if isinstance(item, dict):
+            mitigation = _first_dict_value(item, ["mitigation", "mitigation_action", "solution", "fix", "recommendation"])
+            if mitigation:
+                risk_mitigations.append(str(mitigation))
+    if risk_mitigations:
+        normalized["risk_mitigations"] = _dedupe_strings(risk_mitigations)
+    return normalized
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    result: list[str] = []
+    for item in _as_list(value):
+        text = _stringify_item(item)
+        if text:
+            result.append(text)
+    return _dedupe_strings(result)
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _stringify_item(item: Any) -> str:
+    if item is None:
+        return ""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, (int, float, bool)):
+        return str(item)
+    if isinstance(item, dict):
+        return _stringify_dict_item(item)
+    return str(item).strip()
+
+
+def _stringify_dict_item(item: dict[str, Any]) -> str:
+    preferred_keys = [
+        "risk",
+        "title",
+        "name",
+        "item",
+        "feature",
+        "technology",
+        "screen",
+        "data",
+        "measure",
+        "problem",
+        "audience",
+        "step",
+    ]
+    main = _first_dict_value(item, preferred_keys)
+    parts = [str(main).strip()] if main else []
+
+    consequence = _first_dict_value(item, ["consequence", "impact", "effect"])
+    if consequence:
+        parts.append(f"последствие: {consequence}")
+
+    reason = _first_dict_value(item, ["reason", "why", "rationale"])
+    if reason:
+        parts.append(f"почему: {reason}")
+
+    mitigation = _first_dict_value(item, ["mitigation", "mitigation_action", "solution", "fix", "recommendation"])
+    if mitigation:
+        parts.append(f"снижение: {mitigation}")
+
+    if parts:
+        return "; ".join(parts)
+
+    fallback_parts = [f"{key}: {value}" for key, value in item.items() if value not in (None, "", [])]
+    return "; ".join(fallback_parts).strip()
+
+
+def _first_dict_value(item: dict[str, Any], keys: list[str]) -> Any:
+    for key in keys:
+        value = item.get(key)
+        if value not in (None, "", []):
+            return value
+    return None
+
+
+def _dedupe_strings(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        normalized = item.strip()
+        key = normalized.lower()
+        if normalized and key not in seen:
+            seen.add(key)
+            result.append(normalized)
+    return result
 
 
 def _fallback_response(agent: AgentDefinition, phase: AgentPhase, error: str) -> AgentStructuredResponse:

@@ -2,7 +2,8 @@ from backend.app.agents.roles import AGENTS
 from backend.app.core.config import Settings
 from backend.app.models import AgentId
 from backend.app.models import AgentPhase, MeetingPhase, UserAnswer
-from backend.app.orchestrator import MeetingOrchestrator
+from backend.app.orchestrator import MeetingOrchestrator, _parse_agent_response
+from backend.app.agents.roles import AGENTS_BY_ID
 
 
 class FakeLLM:
@@ -75,6 +76,30 @@ def test_orchestrator_reaches_completed_phase():
     assert "### UX Researcher / Designer" in final_plan
     assert "### Security / Data Expert" in final_plan
     assert "### Skeptic / Risk Officer" in final_plan
+
+
+def test_parser_normalizes_object_risks_from_llm():
+    raw = """
+    {
+      "agent": "Skeptic / Risk Officer",
+      "agent_id": "skeptic_risk_officer",
+      "phase": "clarifying_question",
+      "summary": "Есть риски",
+      "risks": [
+        {
+          "risk": "Недостаточная узнаваемость бренда GlyphForge",
+          "consequence": "Малая вероятность привлечения целевой аудитории.",
+          "mitigation": "Разработать стратегию маркетинга и PR."
+        }
+      ]
+    }
+    """
+    parsed = _parse_agent_response(raw, AGENTS_BY_ID[AgentId.SKEPTIC], AgentPhase.CLARIFYING_QUESTION)
+
+    assert parsed.risks == [
+        "Недостаточная узнаваемость бренда GlyphForge; последствие: Малая вероятность привлечения целевой аудитории.; снижение: Разработать стратегию маркетинга и PR."
+    ]
+    assert parsed.risk_mitigations == ["Разработать стратегию маркетинга и PR."]
 
 
 def _agent_id_from_prompt(system_prompt: str) -> str:
