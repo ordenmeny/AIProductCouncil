@@ -1,0 +1,26 @@
+services:
+  backend:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: sh -c "pip install uv && uv sync && uv run uvicorn backend.app.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - .env.qwen
+    environment:
+      OPENAI_BASE_URL: http://host.docker.internal:1234/v1
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    image: node:22-slim
+    working_dir: /app/frontend
+    volumes:
+      - .:/app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
