@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from openai import AsyncOpenAI
 from openai import APIConnectionError, APIStatusError
 
@@ -68,6 +70,61 @@ class LLMClient:
             raise RuntimeError(f"Cannot connect to LM Studio at {self._settings.openai_base_url}: {exc}") from exc
         return [model.id for model in response.data]
 
+    async def raw_diagnostics(self) -> dict[str, Any]:
+        base = self._settings.openai_base_url.rstrip("/")
+        parsed = urlparse(base)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        urls = [
+            base,
+            f"{base}/models",
+            f"{base}/chat/completions",
+            origin,
+            f"{origin}/v1/models",
+            f"{origin}/api/v0/models",
+        ]
+        results: list[dict[str, Any]] = []
+        async with httpx.AsyncClient(timeout=10) as client:
+            for url in urls:
+                method = "POST" if url.endswith("/chat/completions") else "GET"
+                try:
+                    if method == "POST":
+                        response = await client.post(
+                            url,
+                            headers={"Authorization": f"Bearer {self._settings.openai_api_key}"},
+                            json={
+                                "model": self._settings.openai_model,
+                                "messages": [{"role": "user", "content": "ping"}],
+                                "temperature": 0,
+                                "max_tokens": 8,
+                            },
+                        )
+                    else:
+                        response = await client.get(
+                            url,
+                            headers={"Authorization": f"Bearer {self._settings.openai_api_key}"},
+                        )
+                    results.append(
+                        {
+                            "url": url,
+                            "method": method,
+                            "status_code": response.status_code,
+                            "body": response.text[:1200],
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - diagnostic endpoint returns raw connectivity status.
+                    results.append(
+                        {
+                            "url": url,
+                            "method": method,
+                            "error": str(exc),
+                        }
+                    )
+        return {
+            "configured_base_url": self._settings.openai_base_url,
+            "configured_model": self._settings.openai_model,
+            "results": results,
+        }
+
     async def repair_json(self, invalid_payload: str, validation_error: str) -> str:
         system_prompt = (
             "You repair invalid JSON for a backend parser. Return only a valid JSON object. "
@@ -82,6 +139,7 @@ class LLMClient:
             ensure_ascii=False,
         )
         return await self.complete_json(system_prompt, user_prompt)
+
 
 def _format_openai_status_error(exc: APIStatusError) -> str:
     body = exc.response.text if exc.response is not None else ""

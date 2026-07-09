@@ -54,7 +54,7 @@ def load_meeting_or_404(storage: MeetingStorage, meeting_id: str) -> MeetingStat
 def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
     return {
         "status": "ok",
-        "app_version": "0.1.2",
+        "app_version": "0.1.3",
         "model": settings.openai_model,
         "base_url": settings.openai_base_url,
         "response_format_json": settings.llm_use_response_format,
@@ -64,7 +64,7 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, str | bool]:
 @app.get("/api/debug/config")
 def debug_config(settings: Settings = Depends(get_settings)) -> dict[str, str | int | float | bool]:
     return {
-        "app_version": "0.1.2",
+        "app_version": "0.1.3",
         "env_file": ".env",
         "openai_base_url": settings.openai_base_url,
         "openai_model": settings.openai_model,
@@ -99,6 +99,11 @@ async def llm_models(settings: Settings = Depends(get_settings)) -> dict[str, ob
             status_code=502,
             detail=f"LM Studio models request failed: {exc}",
         ) from exc
+
+
+@app.get("/api/llm/raw-diagnostics")
+async def llm_raw_diagnostics(settings: Settings = Depends(get_settings)) -> dict[str, object]:
+    return await LLMClient(settings).raw_diagnostics()
 
 
 @app.get("/api/agents")
