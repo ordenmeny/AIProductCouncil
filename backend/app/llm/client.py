@@ -14,10 +14,14 @@ from backend.app.core.config import Settings
 class LLMClient:
     def __init__(self, settings: Settings):
         self._settings = settings
+        self._http_client = httpx.AsyncClient(
+            timeout=settings.llm_timeout_seconds,
+            trust_env=False,
+        )
         self._client = AsyncOpenAI(
             base_url=settings.openai_base_url,
             api_key=settings.openai_api_key,
-            timeout=settings.llm_timeout_seconds,
+            http_client=self._http_client,
         )
 
     async def complete_json(self, system_prompt: str, user_prompt: str) -> str:
@@ -83,7 +87,7 @@ class LLMClient:
             f"{origin}/api/v0/models",
         ]
         results: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             for url in urls:
                 method = "POST" if url.endswith("/chat/completions") else "GET"
                 try:

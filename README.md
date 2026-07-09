@@ -49,7 +49,7 @@ npm run dev
 - Посмотреть id моделей, которые реально видит backend: `curl http://127.0.0.1:8000/api/llm/models`.
 - Проверить связку backend → LM Studio: `curl http://127.0.0.1:8000/api/llm/health`.
 - Проверить LM Studio без OpenAI SDK: `curl http://127.0.0.1:8000/api/llm/raw-diagnostics`.
-- Если LM Studio возвращает `502`, проверьте, что local server включен, модель загружена, `OPENAI_MODEL` совпадает с id модели в LM Studio, а `OPENAI_BASE_URL` равен `http://localhost:1234/v1`.
+- Если LM Studio возвращает `502`, проверьте, что local server включен, модель загружена, `OPENAI_MODEL` совпадает с id модели в LM Studio, а `OPENAI_BASE_URL` равен `http://127.0.0.1:1234/v1`.
 - По умолчанию `LLM_USE_RESPONSE_FORMAT=false`, потому что не все модели и версии LM Studio стабильно поддерживают принудительный JSON response format. Оркестратор все равно просит JSON в промпте, извлекает JSON из ответа и валидирует его через Pydantic.
 
 ## API
