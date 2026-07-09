@@ -2,7 +2,7 @@ from backend.app.agents.roles import AGENTS
 from backend.app.core.config import Settings
 from backend.app.models import AgentId
 from backend.app.models import AgentPhase, MeetingPhase, UserAnswer
-from backend.app.orchestrator import MeetingOrchestrator, _parse_agent_response
+from backend.app.orchestrator import MeetingOrchestrator, _parse_agent_response, _repair_truncated_json
 from backend.app.agents.roles import AGENTS_BY_ID
 
 
@@ -100,6 +100,21 @@ def test_parser_normalizes_object_risks_from_llm():
         "Недостаточная узнаваемость бренда GlyphForge; последствие: Малая вероятность привлечения целевой аудитории.; снижение: Разработать стратегию маркетинга и PR."
     ]
     assert parsed.risk_mitigations == ["Разработать стратегию маркетинга и PR."]
+
+
+def test_parser_repairs_truncated_json_string():
+    raw = """
+    {
+      "agent": "Skeptic / Risk Officer",
+      "agent_id": "skeptic_risk_officer",
+      "phase": "individual_analysis",
+      "summary": "Есть риски",
+      "risks": ["Слишком широкий MVP", "Неясный канал привлечения
+    """
+    repaired = _repair_truncated_json(raw)
+    parsed = _parse_agent_response(repaired, AGENTS_BY_ID[AgentId.SKEPTIC], AgentPhase.INDIVIDUAL_ANALYSIS)
+
+    assert parsed.risks == ["Слишком широкий MVP", "Неясный канал привлечения"]
 
 
 def _agent_id_from_prompt(system_prompt: str) -> str:

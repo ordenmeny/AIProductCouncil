@@ -168,6 +168,8 @@ def _system_prompt(agent: AgentDefinition, phase: AgentPhase) -> str:
 - Будь максимально конкретным: функции, риски, шаги, технологии, данные, экраны, решения, критерии.
 - Минимум воды: короткие пункты, 1 мысль = 1 пункт, без общих фраз вроде "улучшить UX" без объяснения как.
 - Все пункты должны быть привязаны к идее пользователя, а не к абстрактному стартапу.
+- Не возвращай больше 4 пунктов в каждом списке. Каждый пункт максимум 18 слов.
+- summary, reason и next_step: по одному короткому предложению.
 - В фазе clarifying_question задай вопрос строго из своей роли и не повторяй вопросы, которые уже есть во входном контексте.
 - Не раскрывай приватный контекст как отдельный блок; используй его в рассуждении.
 """.strip()
@@ -247,7 +249,11 @@ def _parse_agent_response(raw: str, agent: AgentDefinition, phase: AgentPhase) -
     try:
         payload: dict[str, Any] = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON: {exc}") from exc
+        repaired = _repair_truncated_json(raw)
+        try:
+            payload = json.loads(repaired)
+        except json.JSONDecodeError as repair_exc:
+            raise ValueError(f"Invalid JSON: {exc}") from repair_exc
     payload = _normalize_payload(payload)
     payload.setdefault("agent", agent.role.name)
     payload.setdefault("agent_id", agent.role.id)
@@ -298,6 +304,46 @@ def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if risk_mitigations:
         normalized["risk_mitigations"] = _dedupe_strings(risk_mitigations)
     return normalized
+
+
+def _repair_truncated_json(raw: str) -> str:
+    text = raw.strip()
+    if not text:
+        return text
+
+    in_string = False
+    escaped = False
+    stack: list[str] = []
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if stack and stack[-1] == char:
+                stack.pop()
+
+    if escaped:
+        text = text[:-1]
+    if in_string:
+        text += '"'
+
+    text = text.rstrip()
+    while text and text[-1] in ",:":
+        text = text[:-1].rstrip()
+
+    for closer in reversed(stack):
+        text += closer
+    return text
 
 
 def _normalize_string_list(value: Any) -> list[str]:
