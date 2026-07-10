@@ -38,8 +38,10 @@ def build_vote_summary(messages: list[AgentMessage]) -> VoteSummary:
     insights: list[str] = []
     next_steps: list[str] = []
     for response in vote_messages:
-        mvp_features.extend(response.mvp_priority)
-        risks.extend(response.risks or ([response.main_risk] if response.main_risk else []))
+        if response.agent_id == AgentId.PRODUCT:
+            mvp_features.extend(response.core_mvp_features or response.mvp_priority)
+        if response.agent_id in {AgentId.SECURITY, AgentId.SKEPTIC}:
+            risks.extend(response.risks or ([response.main_risk] if response.main_risk else []))
         questions.extend(response.open_questions)
         insights.extend(response.insights)
         if response.next_step:
@@ -187,6 +189,8 @@ def _merge_latest_non_empty(messages: list[AgentMessage]) -> AgentStructuredResp
         return None
     data = base.model_dump()
     list_fields = [
+        "mvp_priority",
+        "roadmap_items",
         "target_audience",
         "user_problem",
         "core_mvp_features",
@@ -291,7 +295,7 @@ def _skeptic_brief(response: AgentStructuredResponse | None) -> str:
 def _collect_roadmap(messages: list[AgentMessage]) -> list[str]:
     items: list[str] = []
     for message in messages:
-        if message.structured:
+        if message.agent_id == AgentId.TECH and message.structured:
             items.extend(message.structured.roadmap_items)
     if items:
         return _dedupe(items)[:8]

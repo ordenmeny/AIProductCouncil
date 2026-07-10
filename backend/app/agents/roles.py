@@ -115,12 +115,12 @@ PHASE_INSTRUCTIONS: dict[AgentPhase, str] = {
         "that makes the MVP stronger."
     ),
     AgentPhase.MVP_PROPOSAL: (
-        "Propose what belongs in v1 and what should be explicitly left out. Keep it narrow, actionable, measurable, and tied "
-        "to your role-specific deliverables."
+        "Propose only your role-specific contribution to v1 and what your profession would explicitly leave out. "
+        "Do not redefine sections owned by other roles. Keep it narrow, actionable, measurable, and tied to your deliverables."
     ),
     AgentPhase.VOTE: (
-        "Vote on the project using one decision: go, go_after_clarification, no_go, or pivot_or_narrow_mvp. Provide MVP priorities, "
-        "roadmap items, open questions, insights, main risk, reason, and a next step."
+        "Vote on the project using one decision: go, go_after_clarification, no_go, or pivot_or_narrow_mvp. Provide only "
+        "your role-specific priorities, open questions, insights, main risk, reason, and next step."
     ),
 }
 

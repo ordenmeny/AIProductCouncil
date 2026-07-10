@@ -10,6 +10,7 @@ from backend.app.core.config import Settings
 from backend.app.exporters import build_documents, build_vote_summary
 from backend.app.llm.client import LLMClient
 from backend.app.models import (
+    AgentId,
     AgentMessage,
     AgentPhase,
     AgentStructuredResponse,
@@ -17,6 +18,31 @@ from backend.app.models import (
     MeetingPhase,
     MeetingState,
 )
+
+ROLE_SPECIFIC_FIELDS = {
+    "mvp_priority",
+    "roadmap_items",
+    "risks",
+    "target_audience",
+    "user_problem",
+    "core_mvp_features",
+    "tech_stack",
+    "tech_stack_reasoning",
+    "user_scenario",
+    "user_screens",
+    "processed_data",
+    "data_sensitivity",
+    "security_measures",
+    "risk_mitigations",
+}
+
+ALLOWED_ROLE_FIELDS: dict[AgentId, set[str]] = {
+    AgentId.PRODUCT: {"target_audience", "user_problem", "core_mvp_features", "mvp_priority"},
+    AgentId.TECH: {"tech_stack", "tech_stack_reasoning", "roadmap_items"},
+    AgentId.UX: {"user_scenario", "user_screens"},
+    AgentId.SECURITY: {"processed_data", "data_sensitivity", "security_measures", "risks"},
+    AgentId.SKEPTIC: {"risks", "risk_mitigations"},
+}
 
 
 class MeetingOrchestrator:
@@ -117,6 +143,7 @@ class MeetingOrchestrator:
 
 def _system_prompt(agent: AgentDefinition, phase: AgentPhase) -> str:
     role_requirements = _role_requirements(agent)
+    json_contract = _json_contract(agent, phase)
     return f"""
 Ты агент в симуляции рабочего созвона IT-команды.
 Твоя роль: {agent.role.name}.
@@ -127,33 +154,8 @@ def _system_prompt(agent: AgentDefinition, phase: AgentPhase) -> str:
 Инструкция текущей фазы: {PHASE_INSTRUCTIONS[phase]}
 
 Верни только JSON object без Markdown.
-Используй только эти поля:
-{{
-  "agent": "{agent.role.name}",
-  "agent_id": "{agent.role.id}",
-  "phase": "{phase}",
-  "summary": "краткий вывод агента",
-  "mvp_priority": ["1-5 конкретных пунктов MVP"],
-  "roadmap_items": ["пункты roadmap, если уместно"],
-  "open_questions": ["важные вопросы заказчику"],
-  "insights": ["полезные инсайты"],
-  "risks": ["риски"],
-  "main_risk": "главный риск",
-  "decision": null,
-  "next_step": "следующий шаг",
-  "reason": "обоснование",
-  "target_audience": ["для Product: конкретные сегменты пользователей"],
-  "user_problem": ["для Product: проблемы пользователей, которые решает продукт"],
-  "core_mvp_features": ["для Product: основные функции MVP"],
-  "tech_stack": ["для Tech Lead: технологии MVP"],
-  "tech_stack_reasoning": ["для Tech Lead: почему выбрана каждая технология"],
-  "user_scenario": ["для UX: шаги пользовательского сценария"],
-  "user_screens": ["для UX: экраны, страницы или модули MVP"],
-  "processed_data": ["для Security: обрабатываемые данные"],
-  "data_sensitivity": ["для Security: чувствительность данных"],
-  "security_measures": ["для Security: меры защиты данных"],
-  "risk_mitigations": ["для Skeptic: способы снижения рисков"]
-}}
+Используй только общие поля и поля своей роли из этого контракта:
+{json_contract}
 
 Обязательные поля для твоей роли:
 {role_requirements}
@@ -165,6 +167,8 @@ def _system_prompt(agent: AgentDefinition, phase: AgentPhase) -> str:
 - В фазе vote decision должен быть одним из: "go", "go_after_clarification", "no_go", "pivot_or_narrow_mvp".
 - В остальных фазах decision должен быть null.
 - Пиши на русском.
+- Отвечай только в своей профессиональной зоне. Учитывай чужие аргументы, но не заполняй и не переопределяй чужие разделы.
+- Product не выбирает стек; Tech Lead не формулирует ЦА; UX не пишет security policy; Security не проектирует фичи; Skeptic не заменяет остальных.
 - Будь максимально конкретным: функции, риски, шаги, технологии, данные, экраны, решения, критерии.
 - Минимум воды: короткие пункты, 1 мысль = 1 пункт, без общих фраз вроде "улучшить UX" без объяснения как.
 - Все пункты должны быть привязаны к идее пользователя, а не к абстрактному стартапу.
@@ -173,6 +177,50 @@ def _system_prompt(agent: AgentDefinition, phase: AgentPhase) -> str:
 - В фазе clarifying_question задай вопрос строго из своей роли и не повторяй вопросы, которые уже есть во входном контексте.
 - Не раскрывай приватный контекст как отдельный блок; используй его в рассуждении.
 """.strip()
+
+
+def _json_contract(agent: AgentDefinition, phase: AgentPhase) -> str:
+    contract: dict[str, Any] = {
+        "agent": agent.role.name,
+        "agent_id": str(agent.role.id),
+        "phase": str(phase),
+        "summary": "краткий вывод агента",
+        "open_questions": ["важные вопросы заказчику"],
+        "insights": ["полезные инсайты"],
+        "main_risk": "главный риск, если он относится к твоей зоне",
+        "decision": None if phase != AgentPhase.VOTE else "go_after_clarification",
+        "next_step": "следующий шаг из твоей роли",
+        "reason": "обоснование",
+    }
+    role_fields: dict[AgentId, dict[str, Any]] = {
+        AgentId.PRODUCT: {
+            "target_audience": ["конкретные сегменты пользователей"],
+            "user_problem": ["проблемы пользователей, которые решает продукт"],
+            "core_mvp_features": ["полезные и необходимые функции MVP"],
+            "mvp_priority": ["приоритеты MVP из продуктовой зоны"],
+        },
+        AgentId.TECH: {
+            "tech_stack": ["технологии MVP"],
+            "tech_stack_reasoning": ["почему выбрана каждая технология"],
+            "roadmap_items": ["технические шаги реализации"],
+        },
+        AgentId.UX: {
+            "user_scenario": ["шаги пользовательского сценария"],
+            "user_screens": ["экраны, страницы или модули MVP"],
+        },
+        AgentId.SECURITY: {
+            "processed_data": ["обрабатываемые данные"],
+            "data_sensitivity": ["чувствительность данных"],
+            "security_measures": ["меры защиты данных"],
+            "risks": ["уязвимости и abuse cases"],
+        },
+        AgentId.SKEPTIC: {
+            "risks": ["конкретные риски проекта"],
+            "risk_mitigations": ["способы снижения рисков"],
+        },
+    }
+    contract.update(role_fields.get(agent.role.id, {}))
+    return json.dumps(contract, ensure_ascii=False, indent=2)
 
 
 def _user_prompt(meeting: MeetingState, agent: AgentDefinition, phase: AgentPhase) -> str:
@@ -194,7 +242,7 @@ def _user_prompt(meeting: MeetingState, agent: AgentDefinition, phase: AgentPhas
                 for message in meeting.messages[-20:]
                 if message.agent_id != agent.role.id or phase == AgentPhase.DEBATE
             ],
-            "expected_output": "A single JSON object matching the schema from the system prompt. Fill role-specific fields for your role.",
+            "expected_output": "A single JSON object matching the system prompt. Fill only your role-specific fields.",
         },
         ensure_ascii=False,
     )
@@ -206,28 +254,33 @@ def _role_requirements(agent: AgentDefinition) -> str:
             "- target_audience: 2-4 конкретных сегмента.\n"
             "- user_problem: 2-5 конкретных пользовательских проблем.\n"
             "- core_mvp_features: 3-7 полезных и необходимых функций MVP.\n"
-            "- mvp_priority должен дублировать или уточнять core_mvp_features."
+            "- mvp_priority должен дублировать или уточнять core_mvp_features.\n"
+            "- Не выбирай технологии, экраны, security-меры и mitigation чужих рисков."
         ),
         "tech_lead": (
             "- tech_stack: список конкретных технологий MVP: frontend, backend, storage, LLM/API, deploy/test минимум.\n"
             "- tech_stack_reasoning: кратко почему выбран этот стек и почему он выгоден для MVP.\n"
-            "- roadmap_items должен отражать техническую последовательность реализации."
+            "- roadmap_items должен отражать техническую последовательность реализации.\n"
+            "- Не формулируй ЦА, пользовательские проблемы, UX-экраны и security policy."
         ),
         "ux_researcher": (
             "- user_scenario: 4-8 шагов пользовательского сценария MVP.\n"
             "- user_screens: список экранов/страниц/модулей, которые нужно реализовать.\n"
-            "- insights должен включать UX-инсайты и потенциальные точки трения."
+            "- insights должен включать UX-инсайты и потенциальные точки трения.\n"
+            "- Не выбирай стек, не определяй защиту данных и не пересобирай продуктовый MVP."
         ),
         "security_data_expert": (
             "- processed_data: список данных, которые сервис будет обрабатывать.\n"
             "- data_sensitivity: чувствительность этих данных: низкая/средняя/высокая и почему.\n"
             "- security_measures: конкретные меры защиты данных и доступа.\n"
-            "- risks должен включать уязвимости и abuse cases."
+            "- risks должен включать уязвимости и abuse cases.\n"
+            "- Не проектируй пользовательские фичи, ЦА, UX-экраны и стек."
         ),
         "skeptic_risk_officer": (
             "- risks: конкретные риски проекта, не общие опасения.\n"
             "- risk_mitigations: практические способы снижения каждого ключевого риска.\n"
-            "- main_risk должен быть самым критичным риском для MVP."
+            "- main_risk должен быть самым критичным риском для MVP.\n"
+            "- Не заменяй Product, Tech, UX и Security: только риски, последствия и способы снижения."
         ),
     }
     return requirements.get(agent.role.id, "- Заполни поля, релевантные своей роли.")
@@ -268,7 +321,16 @@ def _parse_agent_response(raw: str, agent: AgentDefinition, phase: AgentPhase) -
         parsed.phase = phase
     if not parsed.agent:
         parsed.agent = agent.role.name
-    return parsed
+    return _sanitize_response_for_role(parsed)
+
+
+def _sanitize_response_for_role(response: AgentStructuredResponse) -> AgentStructuredResponse:
+    allowed = ALLOWED_ROLE_FIELDS.get(response.agent_id, set())
+    data = response.model_dump()
+    for field in ROLE_SPECIFIC_FIELDS - allowed:
+        if field in data:
+            data[field] = []
+    return AgentStructuredResponse.model_validate(data)
 
 
 def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -534,25 +596,34 @@ def _role_fallback_fields(agent_id: str) -> dict[str, list[str]]:
 
 def _render_agent_response(response: AgentStructuredResponse) -> str:
     parts = [response.summary.strip()] if response.summary else []
-    if response.target_audience:
+    allowed = ALLOWED_ROLE_FIELDS.get(response.agent_id, set())
+    if "target_audience" in allowed and response.target_audience:
         parts.append("ЦА: " + "; ".join(response.target_audience))
-    if response.user_problem:
+    if "user_problem" in allowed and response.user_problem:
         parts.append("Проблемы: " + "; ".join(response.user_problem))
-    if response.core_mvp_features:
+    if "core_mvp_features" in allowed and response.core_mvp_features:
         parts.append("Функции MVP: " + "; ".join(response.core_mvp_features))
-    if response.mvp_priority:
+    if "mvp_priority" in allowed and response.mvp_priority:
         parts.append("MVP: " + "; ".join(response.mvp_priority))
-    if response.tech_stack:
+    if "tech_stack" in allowed and response.tech_stack:
         parts.append("Стек: " + "; ".join(response.tech_stack))
-    if response.user_screens:
+    if "tech_stack_reasoning" in allowed and response.tech_stack_reasoning:
+        parts.append("Почему стек: " + "; ".join(response.tech_stack_reasoning))
+    if "roadmap_items" in allowed and response.roadmap_items:
+        parts.append("Roadmap: " + "; ".join(response.roadmap_items))
+    if "user_scenario" in allowed and response.user_scenario:
+        parts.append("Сценарий: " + "; ".join(response.user_scenario))
+    if "user_screens" in allowed and response.user_screens:
         parts.append("Экраны: " + "; ".join(response.user_screens))
-    if response.processed_data:
+    if "processed_data" in allowed and response.processed_data:
         parts.append("Данные: " + "; ".join(response.processed_data))
-    if response.security_measures:
+    if "data_sensitivity" in allowed and response.data_sensitivity:
+        parts.append("Чувствительность: " + "; ".join(response.data_sensitivity))
+    if "security_measures" in allowed and response.security_measures:
         parts.append("Защита: " + "; ".join(response.security_measures))
-    if response.risks:
+    if "risks" in allowed and response.risks:
         parts.append("Риски: " + "; ".join(response.risks))
-    if response.risk_mitigations:
+    if "risk_mitigations" in allowed and response.risk_mitigations:
         parts.append("Снижение рисков: " + "; ".join(response.risk_mitigations))
     if response.open_questions:
         parts.append("Вопросы: " + "; ".join(response.open_questions))

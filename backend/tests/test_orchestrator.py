@@ -1,8 +1,8 @@
 from backend.app.agents.roles import AGENTS
 from backend.app.core.config import Settings
-from backend.app.models import AgentId
+from backend.app.models import AgentId, AgentStructuredResponse
 from backend.app.models import AgentPhase, MeetingPhase, UserAnswer
-from backend.app.orchestrator import MeetingOrchestrator, _parse_agent_response, _repair_truncated_json
+from backend.app.orchestrator import MeetingOrchestrator, _parse_agent_response, _repair_truncated_json, _sanitize_response_for_role
 from backend.app.agents.roles import AGENTS_BY_ID
 
 
@@ -76,6 +76,7 @@ def test_orchestrator_reaches_completed_phase():
     assert "### UX Researcher / Designer" in final_plan
     assert "### Security / Data Expert" in final_plan
     assert "### Skeptic / Risk Officer" in final_plan
+    assert "ЧУЖОЙ" not in final_plan
 
 
 def test_parser_normalizes_object_risks_from_llm():
@@ -117,6 +118,48 @@ def test_parser_repairs_truncated_json_string():
     assert parsed.risks == ["Слишком широкий MVP", "Неясный канал привлечения"]
 
 
+def test_sanitizer_removes_foreign_role_fields():
+    product = _sanitize_response_for_role(
+        AgentStructuredResponse(
+            agent="Product/Business Manager",
+            agent_id=AgentId.PRODUCT,
+            phase=AgentPhase.INDIVIDUAL_ANALYSIS,
+            summary="Продуктовый вывод",
+            target_audience=["Студенты"],
+            tech_stack=["ЧУЖОЙ СТЕК"],
+            security_measures=["ЧУЖАЯ ЗАЩИТА"],
+        )
+    )
+    tech = _sanitize_response_for_role(
+        AgentStructuredResponse(
+            agent="Tech Lead / Architect",
+            agent_id=AgentId.TECH,
+            phase=AgentPhase.INDIVIDUAL_ANALYSIS,
+            summary="Технический вывод",
+            target_audience=["ЧУЖАЯ ЦА"],
+            tech_stack=["FastAPI"],
+        )
+    )
+    skeptic = _sanitize_response_for_role(
+        AgentStructuredResponse(
+            agent="Skeptic / Risk Officer",
+            agent_id=AgentId.SKEPTIC,
+            phase=AgentPhase.INDIVIDUAL_ANALYSIS,
+            summary="Риски",
+            risks=["Нет спроса"],
+            core_mvp_features=["ЧУЖАЯ ФИЧА"],
+        )
+    )
+
+    assert product.target_audience == ["Студенты"]
+    assert product.tech_stack == []
+    assert product.security_measures == []
+    assert tech.tech_stack == ["FastAPI"]
+    assert tech.target_audience == []
+    assert skeptic.risks == ["Нет спроса"]
+    assert skeptic.core_mvp_features == []
+
+
 def _agent_id_from_prompt(system_prompt: str) -> str:
     for agent_id in AgentId:
         if f'"{agent_id}"' in system_prompt:
@@ -125,7 +168,7 @@ def _agent_id_from_prompt(system_prompt: str) -> str:
 
 
 def _role_fields(agent_id: str) -> str:
-    common = {
+    role_fields = {
         str(AgentId.PRODUCT): (
             '"target_audience":["Операционные менеджеры"],'
             '"user_problem":["Долго согласуют заявки"],'
@@ -148,4 +191,28 @@ def _role_fields(agent_id: str) -> str:
             '"risk_mitigations":["Сузить MVP","Проверить спрос","Назначить владельца"]'
         ),
     }
-    return common.get(agent_id, common[str(AgentId.PRODUCT)])
+    foreign_fields = {
+        str(AgentId.PRODUCT): (
+            '"tech_stack":["ЧУЖОЙ СТЕК"],'
+            '"security_measures":["ЧУЖАЯ ЗАЩИТА"]'
+        ),
+        str(AgentId.TECH): (
+            '"target_audience":["ЧУЖАЯ ЦА"],'
+            '"core_mvp_features":["ЧУЖАЯ ФИЧА"]'
+        ),
+        str(AgentId.UX): (
+            '"tech_stack":["ЧУЖОЙ СТЕК"],'
+            '"security_measures":["ЧУЖАЯ ЗАЩИТА"]'
+        ),
+        str(AgentId.SECURITY): (
+            '"core_mvp_features":["ЧУЖАЯ ФИЧА"],'
+            '"user_screens":["ЧУЖОЙ ЭКРАН"]'
+        ),
+        str(AgentId.SKEPTIC): (
+            '"core_mvp_features":["ЧУЖАЯ ФИЧА"],'
+            '"tech_stack":["ЧУЖОЙ СТЕК"]'
+        ),
+    }
+    own = role_fields.get(agent_id, role_fields[str(AgentId.PRODUCT)])
+    foreign = foreign_fields.get(agent_id, "")
+    return own + ("," + foreign if foreign else "")
